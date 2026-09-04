@@ -1,0 +1,18 @@
+# Auto-request reviews from the right owner. Replace @handles below.
+kernel/thread.c        @member1
+kernel/thread.h        @member1
+kernel/sync.c          @member2
+kernel/sync.h          @member2
+kernel/sched.c         @member3
+kernel/sched.h         @member3
+kernel/donate.c        @member4
+kernel/donate.h        @member4
+kernel/smp_balance.c   @member4
+kernel/smp_balance.h   @member4
+kernel/schedstat.c     @member4
+kernel/schedstat.h     @member4
+user/ttest_basic.c     @member1
+user/synctest.c        @member2
+user/schedtest.c       @member3
+user/schedstat_dump.c  @member4
+tools/viz/             @member4

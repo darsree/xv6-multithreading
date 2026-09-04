@@ -28,7 +28,13 @@ OBJS = \
   $K/sysfile.o \
   $K/kernelvec.o \
   $K/plic.o \
-  $K/virtio_disk.o
+  $K/virtio_disk.o \
+  $K/thread.o \
+  $K/sync.o \
+  $K/sched.o \
+  $K/donate.o \
+  $K/smp_balance.o \
+  $K/schedstat.o \
 
 # riscv64-unknown-elf- or riscv64-linux-gnu-
 # perhaps in /opt/riscv/bin
@@ -150,6 +156,10 @@ UPROGS=\
 	$U/_forphan\
 	$U/_dorphan\
 	$U/_sync\
+	$U/_ttest_basic\
+  	$U/_synctest\
+  	$U/_schedtest\
+  	$U/_schedstat_dump\
 
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)
