@@ -26,6 +26,11 @@ int pause(int);
 int uptime(void);
 int sync(void);
 
+// M1: thread core & lifecycle
+int thread_create(void (*fcn)(void *), void *arg, void *stack);
+int thread_join(int tid);
+void thread_exit(void *retval) __attribute__((noreturn));
+
 // ulib.c
 int stat(const char *, struct stat *);
 char *strcpy(char *, const char *);

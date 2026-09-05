@@ -6,6 +6,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "vm.h"
+#include "thread.h"
 
 uint64
 sys_exit(void)
@@ -109,4 +110,38 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+
+// M1: int thread_create(void (*fcn)(void*), void *arg, void *stack);
+uint64
+sys_thread_create(void)
+{
+  uint64 fcn, arg, stack;
+
+  argaddr(0, &fcn);
+  argaddr(1, &arg);
+  argaddr(2, &stack);
+
+  return thread_create((void (*)(void *))fcn, (void *)arg, (void *)stack);
+}
+
+// M1: int thread_join(int tid);
+uint64
+sys_thread_join(void)
+{
+  int tid;
+
+  argint(0, &tid);
+  return thread_join(tid);
+}
+
+// M1: void thread_exit(void *retval);
+uint64
+sys_thread_exit(void)
+{
+  uint64 retval;
+
+  argaddr(0, &retval);
+  thread_exit((void *)retval);
+  return 0; // not reached
 }

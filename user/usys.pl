@@ -43,3 +43,6 @@ entry("sbrk");
 entry("pause");
 entry("uptime");
 entry("sync");
+entry("thread_create");
+entry("thread_join");
+entry("thread_exit");
