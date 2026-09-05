@@ -113,6 +113,16 @@ int             thread_join(int tid);
 void            thread_exit(void *retval);
 void            thread_group_teardown(int tgid);
 
+int  kmutex_create(void);
+int  kmutex_lock(int);
+int  kmutex_unlock(int);
+int  kmutex_destroy(int);
+int  cv_create(void);
+int  cv_wait(int, int);
+int  cv_signal(int);
+int  cv_broadcast(int);
+void kmutex_init(void);
+
 // swtch.S
 void            swtch(struct context*, struct context*);
 

@@ -23,6 +23,19 @@ update anything you already hardcoded against the old table.**
 | 32 | getschedstat | M4 |
 | 33–35 | (reserved buffer) | — |
 
+
+# member 2
+
+| 26 | M2 | mutex_create |
+| 27 | M2 | mutex_lock |
+| 28 | M2 | mutex_unlock |
+| 29 | M2 | cv_wait |
+| 30 | M2 | cv_signal |
+| 31 | M2 | cv_broadcast (not in original reservation — 31 was nominally M3's, confirmed unused, flagging in PR) |
+| 33 | M2 | cv_create (never reserved in original table — gap in scaffold) |
+| 34 | M2 | mutex_destroy (never reserved in original table) |
+
+
 Rule: each member appends ONLY their own rows to syscall.h /
 sysproc.c / usys.pl / user/user.h. Never renumber or reflow existing
 entries.

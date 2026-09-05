@@ -107,6 +107,16 @@ extern uint64 sys_thread_create(void);
 extern uint64 sys_thread_join(void);
 extern uint64 sys_thread_exit(void);
 
+extern uint64 sys_cv_create(void);
+extern uint64 sys_mutex_create(void);
+extern uint64 sys_mutex_lock(void);
+extern uint64 sys_mutex_destroy(void);
+extern uint64 sys_mutex_unlock(void);
+extern uint64 sys_cv_wait(void);
+extern uint64 sys_cv_signal(void);
+extern uint64 sys_cv_broadcast(void);
+
+
 // An array mapping syscall numbers from syscall.h
 // to the function that handles the system call.
 static uint64 (*syscalls[])(void) = {
@@ -136,6 +146,14 @@ static uint64 (*syscalls[])(void) = {
   [SYS_thread_create] = sys_thread_create,
   [SYS_thread_join]   = sys_thread_join,
   [SYS_thread_exit]   = sys_thread_exit,
+  [SYS_cv_create] = sys_cv_create,
+  [SYS_mutex_create] = sys_mutex_create,
+  [SYS_mutex_lock]   = sys_mutex_lock,
+  [SYS_mutex_unlock] = sys_mutex_unlock,
+  [SYS_mutex_destroy] = sys_mutex_destroy,
+  [SYS_cv_wait]       = sys_cv_wait,
+  [SYS_cv_signal]     = sys_cv_signal,
+  [SYS_cv_broadcast]  = sys_cv_broadcast,
   // clang-format on
 };
 

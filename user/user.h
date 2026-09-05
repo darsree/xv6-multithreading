@@ -46,6 +46,16 @@ void *memcpy(void *, const void *, uint);
 char *sbrk(int);
 char *sbrklazy(int);
 
+// M2: synchronization
+int  mutex_create(void);
+int  mutex_lock(int);
+int  mutex_unlock(int);
+int mutex_destroy(int);
+int  cv_create(void);
+int  cv_wait(int, int);
+int  cv_signal(int);
+int  cv_broadcast(int);
+
 // printf.c
 void fprintf(int, const char *, ...) __attribute__((format(printf, 2, 3)));
 void printf(const char *, ...) __attribute__((format(printf, 1, 2)));

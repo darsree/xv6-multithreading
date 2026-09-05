@@ -30,4 +30,8 @@
 #define SYS_cv_wait       29
 #define SYS_cv_signal     30
 // 31 reserved / unused
+
+#define SYS_cv_broadcast  31   // tentative — confirm with M3, table lists 31 as their reserved-but-unused slot
 #define SYS_getschedstat  32
+#define SYS_cv_create 33
+#define SYS_mutex_destroy 34
