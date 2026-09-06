@@ -139,6 +139,10 @@ found:
   p->retval = 0;
   p->pgrefcnt = 0;
 
+  // M3: fresh MLFQ state (top queue, base quantum, zeroed aging/usage
+  // counters) — every proc, thread or otherwise, goes through here.
+  mlfq_init_proc(p);
+
   // Allocate a trapframe page.
   if ((p->trapframe = (struct trapframe *)kalloc()) == 0) {
     freeproc(p);
@@ -501,28 +505,25 @@ scheduler(void)
     intr_on();
     intr_off();
 
-    int found = 0;
-    for (p = proc; p < &proc[NPROC]; p++) {
-      acquire(&p->lock);
-      if (p->state == RUNNABLE) {
-        // Switch to chosen process.  It is the process's job
-        // to release its lock and then reacquire it
-        // before jumping back to us.
-        p->state = RUNNING;
-        c->proc = p;
-        swtch(&c->context, &p->context);
+    // M3: MLFQ pick — scans queue_level 0..NQUEUES-1 and returns the
+    // chosen proc with its lock already held (or 0 if none RUNNABLE).
+    p = sched_pick_next();
+    if (p) {
+      // Switch to chosen process.  It is the process's job
+      // to release its lock and then reacquire it
+      // before jumping back to us.
+      p->state = RUNNING;
+      c->proc = p;
+      swtch(&c->context, &p->context);
 
-        // Don't re-enable interrupts on release.
-        mycpu()->intena = 0;
+      // Don't re-enable interrupts on release.
+      mycpu()->intena = 0;
 
-        // Process is done running for now.
-        // It should have changed its p->state before coming back.
-        c->proc = 0;
-        found = 1;
-      }
+      // Process is done running for now.
+      // It should have changed its p->state before coming back.
+      c->proc = 0;
       release(&p->lock);
-    }
-    if (found == 0) {
+    } else {
       // nothing to run; stop running on this core until an interrupt.
       asm volatile("wfi");
     }
@@ -550,6 +551,11 @@ sched(void)
     panic("sched RUNNING");
   if (intr_get())
     panic("sched interruptible");
+
+  // M3: p->state already reflects why p is leaving RUNNING (RUNNABLE =
+  // quantum expired via yield(), SLEEPING = blocked early, ZOMBIE =
+  // exiting) — exactly the signal MLFQ feedback/adaptive quantum need.
+  mlfq_on_switch_out(p);
 
   intena = mycpu()->intena;
   swtch(&p->context, &mycpu()->context);

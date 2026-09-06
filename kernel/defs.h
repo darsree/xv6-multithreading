@@ -113,6 +113,13 @@ int             thread_join(int tid);
 void            thread_exit(void *retval);
 void            thread_group_teardown(int tgid);
 
+// sched.c
+void            mlfq_init_proc(struct proc *);
+int             mlfq_tick(struct proc *);
+void            mlfq_age_tick(void);
+void            mlfq_on_switch_out(struct proc *);
+struct proc*    sched_pick_next(void);
+
 int  kmutex_create(void);
 int  kmutex_lock(int);
 int  kmutex_unlock(int);

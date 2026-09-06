@@ -81,8 +81,9 @@ usertrap(void)
   if (killed(p))
     kexit(-1);
 
-  // give up the CPU if this is a timer interrupt.
-  if (which_dev == 2)
+  // M3: give up the CPU only once this proc's (adaptive) MLFQ quantum
+  // has actually expired, not on every single timer tick.
+  if (which_dev == 2 && mlfq_tick(p))
     yield();
 
   prepare_return();
@@ -153,8 +154,8 @@ kerneltrap()
     panic("kerneltrap");
   }
 
-  // give up the CPU if this is a timer interrupt.
-  if (which_dev == 2 && myproc() != 0)
+  // M3: same adaptive-quantum gating as usertrap() (see there).
+  if (which_dev == 2 && myproc() != 0 && mlfq_tick(myproc()))
     yield();
 
   // the yield() may have caused some traps to occur,
@@ -170,6 +171,10 @@ clockintr()
     acquire(&tickslock);
     ticks++;
     wakeup(&ticks);
+    // M3: age every RUNNABLE-but-not-running proc once per global tick
+    // (still under tickslock, matching the ordering wakeup() above
+    // already uses from this call site) so nothing waits forever.
+    mlfq_age_tick();
     release(&tickslock);
   }
 

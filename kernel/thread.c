@@ -265,51 +265,68 @@ thread_group_teardown(int tgid)
   struct proc *me = myproc();
   int pending;
 
-  // Phase 1: mark every other member of the group killed, and wake
-  // any that are sleeping so they notice next time they'd block.
+  // Phase 1: mark every other member of the group killed and
+  // wake sleeping members so they can notice the killed flag.
   for (struct proc *pp = proc; pp < &proc[NPROC]; pp++) {
     if (pp == me)
       continue;
+
     acquire(&pp->lock);
+
     if (pp->tgid == tgid && pp->state != UNUSED) {
       pp->killed = 1;
+
       if (pp->state == SLEEPING)
         pp->state = RUNNABLE;
     }
+
     release(&pp->lock);
   }
 
-  // Phase 2: wait for and reap every other member. Bounded by them
-  // noticing `killed` the next time they trap into the kernel (timer
-  // interrupt, syscall, etc. — see usertrap()'s killed(p) check).
-  // Reaping happens under join_lock, same lock/order thread_join()
-  // uses, so we can never free a target out from under a joiner
-  // that's mid-way through checking it.
+  // Phase 2: wait for threads to exit and reap only actual threads.
+  // Normal processes must remain ZOMBIE so their real parent can
+  // reap them with wait() and obtain the correct exit status.
   do {
     pending = 0;
     int reaped = 0;
+
     acquire(&join_lock);
+
     for (struct proc *pp = proc; pp < &proc[NPROC]; pp++) {
       if (pp == me)
         continue;
+
       acquire(&pp->lock);
+
       if (pp->tgid != tgid || pp->state == UNUSED) {
         release(&pp->lock);
         continue;
       }
+
       if (pp->state == ZOMBIE) {
-        freeproc(pp);
+
+        // Only reap actual threads here.
+        // Normal processes must be left as ZOMBIE for wait().
+        if (pp->is_thread) {
+          pp->parent = 0;
+          freeproc(pp);
+          reaped = 1;
+        }
+
         release(&pp->lock);
-        reaped = 1;
       } else {
         pending = 1;
         release(&pp->lock);
       }
     }
+
     release(&join_lock);
+
     if (reaped)
-      wakeup(&join_lock); // let any thread_join() sleeper re-check
+      wakeup(&join_lock);
+
     if (pending)
       yield();
+
   } while (pending);
 }
