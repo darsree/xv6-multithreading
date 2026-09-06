@@ -20,6 +20,8 @@ main()
     kvminit();          // create kernel page table
     kvminithart();      // turn on paging
     procinit();         // process table
+    threadinit();       // thread subsystem (M1: pgrefcnt lock)
+    kmutex_init();
     trapinit();         // trap vectors
     trapinithart();     // install kernel trap vector
     plicinit();         // set up interrupt controller

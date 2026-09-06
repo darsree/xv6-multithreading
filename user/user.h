@@ -26,6 +26,11 @@ int pause(int);
 int uptime(void);
 int sync(void);
 
+// M1: thread core & lifecycle
+int thread_create(void (*fcn)(void *), void *arg, void *stack);
+int thread_join(int tid);
+void thread_exit(void *retval) __attribute__((noreturn));
+
 // ulib.c
 int stat(const char *, struct stat *);
 char *strcpy(char *, const char *);
@@ -40,6 +45,16 @@ int memcmp(const void *, const void *, uint);
 void *memcpy(void *, const void *, uint);
 char *sbrk(int);
 char *sbrklazy(int);
+
+// M2: synchronization
+int  mutex_create(void);
+int  mutex_lock(int);
+int  mutex_unlock(int);
+int mutex_destroy(int);
+int  cv_create(void);
+int  cv_wait(int, int);
+int  cv_signal(int);
+int  cv_broadcast(int);
 
 // printf.c
 void fprintf(int, const char *, ...) __attribute__((format(printf, 2, 3)));
