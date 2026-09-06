@@ -80,6 +80,8 @@ void            printkinit(void);
 
 // proc.c
 int             cpuid(void);
+struct proc*    allocproc(void);
+void            freeproc(struct proc *);
 void            kexit(int);
 int             kfork(void);
 int             growproc(int);
@@ -103,6 +105,23 @@ void            yield(void);
 int             either_copyout(int user_dst, uint64 dst, void *src, uint64 len);
 int             either_copyin(void *dst, int user_src, uint64 src, uint64 len);
 void            procdump(void);
+
+// thread.c
+void            threadinit(void);
+int             thread_create(void (*fcn)(void*), void *arg, void *stack);
+int             thread_join(int tid);
+void            thread_exit(void *retval);
+void            thread_group_teardown(int tgid);
+
+int  kmutex_create(void);
+int  kmutex_lock(int);
+int  kmutex_unlock(int);
+int  kmutex_destroy(int);
+int  cv_create(void);
+int  cv_wait(int, int);
+int  cv_signal(int);
+int  cv_broadcast(int);
+void kmutex_init(void);
 
 // swtch.S
 void            swtch(struct context*, struct context*);
@@ -163,6 +182,7 @@ int             uvmcopy(pagetable_t, pagetable_t, uint64);
 void            uvmfree(pagetable_t, uint64);
 void            uvmunmap(pagetable_t, uint64, uint64, int);
 void            uvmclear(pagetable_t, uint64);
+void            freewalk(pagetable_t);
 pte_t *         walk(pagetable_t, uint64, int);
 uint64          walkaddr(pagetable_t, uint64);
 int             copyout(pagetable_t, uint64, uint64, char *, uint64);

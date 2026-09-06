@@ -20,13 +20,18 @@
 #define SYS_link   19
 #define SYS_mkdir  20
 #define SYS_close  21
-#define SYS_sync   22
-#define SYS_thread_create 22
-#define SYS_thread_join   23
-#define SYS_thread_exit   24
-#define SYS_mutex_create  25
-#define SYS_mutex_lock    26
-#define SYS_mutex_unlock  27
-#define SYS_cv_wait       28
-#define SYS_cv_signal     29
+#define SYS_sync          22
+#define SYS_thread_create 23
+#define SYS_thread_join   24
+#define SYS_thread_exit   25
+#define SYS_mutex_create  26
+#define SYS_mutex_lock    27
+#define SYS_mutex_unlock  28
+#define SYS_cv_wait       29
+#define SYS_cv_signal     30
+// 31 reserved / unused
+
+#define SYS_cv_broadcast  31   // tentative — confirm with M3, table lists 31 as their reserved-but-unused slot
 #define SYS_getschedstat  32
+#define SYS_cv_create 33
+#define SYS_mutex_destroy 34
