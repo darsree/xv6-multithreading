@@ -24,13 +24,12 @@ int  kmutex_lock(int id);
 int  kmutex_unlock(int id);
 int  kmutex_destroy(int id);
 
+int cv_create(void);
 int  cv_wait(int cv_id, int mutex_id);
 int  cv_signal(int cv_id);
 int  cv_broadcast(int cv_id);
 
-// Optional: semaphore as thin wrapper over mutex + cv
-int  sem_create(int count);
-int  sem_wait(int id);
-int  sem_post(int id);
+
+
 
 #endif // SYNC_H

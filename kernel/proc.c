@@ -15,8 +15,12 @@ struct proc *initproc;
 int nextpid = 1;
 struct spinlock pid_lock;
 
+// M1: protects *p->pgrefcnt updates across threads sharing a tgid.
+// Defined and initialized (threadinit()) in thread.c.
+extern struct spinlock thread_lock;
+
 extern void forkret(void);
-static void freeproc(struct proc *p);
+void freeproc(struct proc *p);
 
 extern char trampoline[]; // trampoline.S
 
@@ -51,6 +55,7 @@ procinit(void)
 
   initlock(&pid_lock, "nextpid");
   initlock(&wait_lock, "wait_lock");
+  schedstatinit();
   for (p = proc; p < &proc[NPROC]; p++) {
     initlock(&p->lock, "proc");
     p->state = UNUSED;
@@ -106,7 +111,7 @@ allocpid()
 // If found, initialize state required to run in the kernel,
 // and return with p->lock held.
 // If there are no free procs, or a memory allocation fails, return 0.
-static struct proc *
+struct proc *
 allocproc(void)
 {
   struct proc *p;
@@ -125,6 +130,21 @@ found:
   p->pid = allocpid();
   p->state = USED;
 
+  // M1: default thread-identity fields. A normal (non-thread) process
+  // is its own group leader. thread_create() overrides these for the
+  // procs it spawns.
+  p->tgid = p->pid;
+  p->tid = p->pid;
+  p->is_thread = 0;
+  p->ustack_base = 0;
+  p->retval = 0;
+  p->pgrefcnt = 0;
+
+  // M3: fresh MLFQ state (top queue, base quantum, zeroed aging/usage
+  // counters) — every proc, thread or otherwise, goes through here.
+  mlfq_init_proc(p);
+  donate_init_proc(p);
+  
   // Allocate a trapframe page.
   if ((p->trapframe = (struct trapframe *)kalloc()) == 0) {
     freeproc(p);
@@ -152,14 +172,51 @@ found:
 // free a proc structure and the data hanging from it,
 // including user pages.
 // p->lock must be held.
-static void
+void
 freeproc(struct proc *p)
 {
   if (p->trapframe)
     kfree((void *)p->trapframe);
   p->trapframe = 0;
-  if (p->pagetable)
-    proc_freepagetable(p->pagetable, p->sz);
+
+  if (p->pagetable) {
+    if (p->pgrefcnt) {
+      // This proc's address space is (or was) shared with other
+      // threads in its tgid. shared_hi marks the top of the region
+      // whose physical pages are mirrored across the group:
+      //   - for a thread (is_thread): everything below its own
+      //     private stack (ustack_base)
+      //   - for the group leader: its whole [0,sz), since that's
+      //     exactly what got mirrored into every thread it spawned
+      uint64 shared_hi = p->is_thread ? p->ustack_base : p->sz;
+
+      // Private per-thread stack: nobody else references these
+      // physical pages, always safe to free outright.
+      if (p->is_thread && p->sz > shared_hi)
+        uvmunmap(p->pagetable, shared_hi,
+                 (PGROUNDUP(p->sz) - shared_hi) / PGSIZE, 1);
+
+      acquire(&thread_lock);
+      int refs = --(*p->pgrefcnt);
+      release(&thread_lock);
+
+      // Shared region: only physically free the underlying pages
+      // when we were the last proc in the group referencing them.
+      // Otherwise just drop our own mapping to it.
+      if (shared_hi > 0)
+        uvmunmap(p->pagetable, 0, PGROUNDUP(shared_hi) / PGSIZE,
+                 refs == 0 ? 1 : 0);
+
+      if (refs == 0)
+        kfree((void *)p->pgrefcnt);
+
+      uvmunmap(p->pagetable, TRAMPOLINE, 1, 0);
+      uvmunmap(p->pagetable, TRAPFRAME, 1, 0);
+      freewalk(p->pagetable);
+    } else {
+      proc_freepagetable(p->pagetable, p->sz);
+    }
+  }
   p->pagetable = 0;
   p->sz = 0;
   p->pid = 0;
@@ -167,6 +224,12 @@ freeproc(struct proc *p)
   p->chan = 0;
   p->killed = 0;
   p->xstate = 0;
+  p->tgid = 0;
+  p->tid = 0;
+  p->is_thread = 0;
+  p->ustack_base = 0;
+  p->retval = 0;
+  p->pgrefcnt = 0;
   p->state = UNUSED;
 }
 
@@ -330,6 +393,9 @@ kexit(int status)
   if (p == initproc)
     panic("init exiting");
 
+  // M1: one thread exiting tears down the whole group.
+  thread_group_teardown(p->tgid);
+
   // Close all open files.
   for (int fd = 0; fd < NOFILE; fd++) {
     if (p->ofile[fd]) {
@@ -441,28 +507,27 @@ scheduler(void)
     intr_on();
     intr_off();
 
-    int found = 0;
-    for (p = proc; p < &proc[NPROC]; p++) {
-      acquire(&p->lock);
-      if (p->state == RUNNABLE) {
-        // Switch to chosen process.  It is the process's job
-        // to release its lock and then reacquire it
-        // before jumping back to us.
-        p->state = RUNNING;
-        c->proc = p;
-        swtch(&c->context, &p->context);
+    // M3: MLFQ pick — scans queue_level 0..NQUEUES-1 and returns the
+    // chosen proc with its lock already held (or 0 if none RUNNABLE).
+    p = sched_pick_next();
+    
+    if (p) {
+      // Switch to chosen process.  It is the process's job
+      // to release its lock and then reacquire it
+      // before jumping back to us.
+      p->state = RUNNING;
+      c->proc = p;
+      record_schedstat(p, cpuid());
+      swtch(&c->context, &p->context);
 
-        // Don't re-enable interrupts on release.
-        mycpu()->intena = 0;
+      // Don't re-enable interrupts on release.
+      mycpu()->intena = 0;
 
-        // Process is done running for now.
-        // It should have changed its p->state before coming back.
-        c->proc = 0;
-        found = 1;
-      }
+      // Process is done running for now.
+      // It should have changed its p->state before coming back.
+      c->proc = 0;
       release(&p->lock);
-    }
-    if (found == 0) {
+    } else {
       // nothing to run; stop running on this core until an interrupt.
       asm volatile("wfi");
     }
@@ -490,6 +555,11 @@ sched(void)
     panic("sched RUNNING");
   if (intr_get())
     panic("sched interruptible");
+
+  // M3: p->state already reflects why p is leaving RUNNING (RUNNABLE =
+  // quantum expired via yield(), SLEEPING = blocked early, ZOMBIE =
+  // exiting) — exactly the signal MLFQ feedback/adaptive quantum need.
+  mlfq_on_switch_out(p);
 
   intena = mycpu()->intena;
   swtch(&p->context, &mycpu()->context);
@@ -602,6 +672,7 @@ int
 kkill(int pid)
 {
   struct proc *p;
+  int tgid = -1;
 
   for (p = proc; p < &proc[NPROC]; p++) {
     acquire(&p->lock);
@@ -611,12 +682,18 @@ kkill(int pid)
         // Wake process from sleep().
         p->state = RUNNABLE;
       }
+      tgid = p->tgid;
       release(&p->lock);
-      return 0;
+      break;
     }
     release(&p->lock);
   }
-  return -1;
+  if (tgid == -1)
+    return -1;
+
+  // M1: killing any one thread reaps the whole tgid.
+  thread_group_teardown(tgid);
+  return 0;
 }
 
 void

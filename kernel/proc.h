@@ -112,4 +112,11 @@ struct proc {
   int wait_ticks;
   int quantum;
   int donated_priority;
+  // M3: MLFQ scheduler bookkeeping (owned by sched.c). ticks_run counts
+  // ticks used in the CURRENT run (reset each dispatch/switch-out);
+  // ema_pct is a 0-100 exponential moving average of how much of its
+  // quantum this proc tends to use before blocking (high = CPU-bound,
+  // low = I/O-bound), used to drive adaptive quantum sizing.
+  int ticks_run;
+  int ema_pct;
 };
