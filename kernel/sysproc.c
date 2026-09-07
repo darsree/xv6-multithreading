@@ -8,6 +8,7 @@
 #include "vm.h"
 #include "thread.h"
 #include "sync.h"
+#include "schedstat.h"
 
 uint64
 sys_exit(void)
@@ -212,4 +213,14 @@ sys_mutex_destroy(void)
   int id;
   argint(0, &id);
   return kmutex_destroy(id);
+}
+uint64
+sys_getschedstat(void)
+{
+  uint64 buf;
+  int max;
+
+  argaddr(0, &buf);
+  argint(1, &max);
+  return getschedstat((void *)buf, max);
 }

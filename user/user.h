@@ -55,6 +55,7 @@ int  cv_create(void);
 int  cv_wait(int, int);
 int  cv_signal(int);
 int  cv_broadcast(int);
+int getschedstat(void *buf, int max);
 
 // printf.c
 void fprintf(int, const char *, ...) __attribute__((format(printf, 2, 3)));

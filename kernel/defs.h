@@ -116,9 +116,17 @@ void            thread_group_teardown(int tgid);
 // sched.c
 void            mlfq_init_proc(struct proc *);
 int             mlfq_tick(struct proc *);
+void            schedstatinit(void);
+void            record_schedstat(struct proc*, int);
+int             getschedstat(void*, int);
 void            mlfq_age_tick(void);
 void            mlfq_on_switch_out(struct proc *);
 struct proc*    sched_pick_next(void);
+
+// donate.c
+void            donate_init_proc(struct proc *);
+void            donate_boost(int, int);
+void            donate_restore(int);
 
 int  kmutex_create(void);
 int  kmutex_lock(int);

@@ -2,10 +2,15 @@
 #ifndef DONATE_H
 #define DONATE_H
 
-// Boost the mutex owner's priority to the blocker's priority.
-// Build/test first against a hand-rolled dummy mutex; swap to M2's
-// real struct kmutex at Week 3 integration.
-void donate_boost(int owner_pid, int blocker_priority);
+// Call once per proc, from allocproc(). Initializes donation state.
+void donate_init_proc(struct proc *p);
+
+// Boost the mutex owner's queue_level toward the blocker's, so the
+// scheduler runs it sooner. blocker_level is the blocking thread's
+// own p->queue_level.
+void donate_boost(int owner_pid, int blocker_level);
+
+// Restore the owner's queue_level after it releases the mutex.
 void donate_restore(int pid);
 
 #endif // DONATE_H

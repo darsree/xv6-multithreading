@@ -55,6 +55,7 @@ procinit(void)
 
   initlock(&pid_lock, "nextpid");
   initlock(&wait_lock, "wait_lock");
+  schedstatinit();
   for (p = proc; p < &proc[NPROC]; p++) {
     initlock(&p->lock, "proc");
     p->state = UNUSED;
@@ -142,7 +143,8 @@ found:
   // M3: fresh MLFQ state (top queue, base quantum, zeroed aging/usage
   // counters) — every proc, thread or otherwise, goes through here.
   mlfq_init_proc(p);
-
+  donate_init_proc(p);
+  
   // Allocate a trapframe page.
   if ((p->trapframe = (struct trapframe *)kalloc()) == 0) {
     freeproc(p);
@@ -508,12 +510,14 @@ scheduler(void)
     // M3: MLFQ pick — scans queue_level 0..NQUEUES-1 and returns the
     // chosen proc with its lock already held (or 0 if none RUNNABLE).
     p = sched_pick_next();
+    
     if (p) {
       // Switch to chosen process.  It is the process's job
       // to release its lock and then reacquire it
       // before jumping back to us.
       p->state = RUNNING;
       c->proc = p;
+      record_schedstat(p, cpuid());
       swtch(&c->context, &p->context);
 
       // Don't re-enable interrupts on release.

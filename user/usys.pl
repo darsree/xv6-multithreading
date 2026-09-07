@@ -54,3 +54,4 @@ entry("cv_create");
 entry("cv_wait");
 entry("cv_signal");
 entry("cv_broadcast");
+entry("getschedstat");

@@ -6,6 +6,7 @@
 #include "proc.h"
 #include "defs.h"
 #include "sync.h"
+#include "donate.h"
 
 extern struct proc proc[NPROC];
 
@@ -45,9 +46,6 @@ kmutex_create(void)
   return -1;
 }
 
-static struct spinlock cv_lock;
-// in kmutex_init(): initlock(&cv_lock, "cv");
-
 int
 cv_create(void)
 {
@@ -80,6 +78,7 @@ kmutex_lock(int id)
       release(&m->lk);
       return -1;
     }
+    donate_boost(m->owner, myproc()->queue_level);
     sleep_prepare(m);
     release(&m->lk);
     sleep();
@@ -90,7 +89,6 @@ kmutex_lock(int id)
   release(&m->lk);
   return 0;
 }
-
 
 int
 kmutex_unlock(int id)
@@ -104,6 +102,7 @@ kmutex_unlock(int id)
     release(&m->lk);
     return -1;
   }
+  donate_restore(m->owner);
   m->locked = 0;
   m->owner = -1;
   release(&m->lk);
@@ -185,4 +184,3 @@ cv_broadcast(int cv_id)
   wakeup(&cvs[cv_id]);
   return 0;
 }
-

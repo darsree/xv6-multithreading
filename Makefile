@@ -160,6 +160,7 @@ UPROGS=\
   	$U/_synctest\
   	$U/_schedtest\
   	$U/_schedstat_dump\
+	$U/_donatetest\
 
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)

@@ -115,7 +115,7 @@ extern uint64 sys_mutex_unlock(void);
 extern uint64 sys_cv_wait(void);
 extern uint64 sys_cv_signal(void);
 extern uint64 sys_cv_broadcast(void);
-
+extern uint64 sys_getschedstat(void);
 
 // An array mapping syscall numbers from syscall.h
 // to the function that handles the system call.
@@ -154,6 +154,7 @@ static uint64 (*syscalls[])(void) = {
   [SYS_cv_wait]       = sys_cv_wait,
   [SYS_cv_signal]     = sys_cv_signal,
   [SYS_cv_broadcast]  = sys_cv_broadcast,
+  [SYS_getschedstat] = sys_getschedstat,
   // clang-format on
 };
 

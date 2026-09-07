@@ -19,6 +19,7 @@ struct schedstat_rec {
 
 // Self-contained addition to swtch/scheduler() — no dependency on
 // anyone else's code.
+void schedstatinit(void);
 void record_schedstat(struct proc *p, int cpu_id);
 
 // Syscall body: copies up to `max` records into user buf, returns count.
