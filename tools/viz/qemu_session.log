@@ -1,0 +1,138 @@
+qemu-system-riscv64 -machine virt -bios none -kernel kernel/kernel -m 128M -smp 3 -nographic -global virtio-mmio.force-legacy=false -drive file=fs.img,if=none,format=raw,id=x0 -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0
+
+xv6 kernel is booting
+
+hart 2 starting
+hart 1 starting
+init: starting sh
+$ donatetest
+[low] burning CPU to force demotion...
+mlfq: t=41 pid=5 tid=5 level 0->1 ema=30% q=2 (quantum used up)
+mlfq: t=41 pid=4 tid=4 level 0->1 ema=30% q=2 (quantum used up)
+[low] now locking mutex (should be demoted by now)
+[low] got the mutex, holding it for a LONG time...
+[high] trying to lock (should block on low's held mutex)...
+mlfq: t=43 pid=5 tid=5 level 1->0 ema=33% q=5 (blocked early)
+mlfq: t=46 pid=4 tid=4 level 1->2 ema=51% q=5 (quantum used up)
+[low] releasing the mutex
+donate: pid=4 RESTORE level 2 -> 1
+[high] got the mutex!
+
+--- schedstat dump (all records) ---
+tick=1 tgid=1 tid=1 cpu=0 level=0
+tick=1 tgid=1 tid=1 cpu=2 level=0
+tick=1 tgid=1 tid=1 cpu=2 level=0
+tick=1 tgid=1 tid=1 cpu=2 level=0
+tick=1 tgid=1 tid=1 cpu=1 level=0
+tick=1 tgid=1 tid=1 cpu=2 level=0
+tick=1 tgid=1 tid=1 cpu=1 level=0
+tick=1 tgid=1 tid=1 cpu=0 level=0
+tick=1 tgid=1 tid=1 cpu=2 level=0
+tick=1 tgid=1 tid=1 cpu=1 level=0
+tick=1 tgid=1 tid=1 cpu=2 level=0
+tick=1 tgid=1 tid=1 cpu=1 level=0
+tick=1 tgid=1 tid=1 cpu=0 level=0
+tick=1 tgid=1 tid=1 cpu=2 level=0
+tick=1 tgid=1 tid=1 cpu=1 level=0
+tick=1 tgid=1 tid=1 cpu=0 level=0
+tick=1 tgid=1 tid=1 cpu=2 level=0
+tick=1 tgid=1 tid=1 cpu=1 level=0
+tick=2 tgid=1 tid=1 cpu=2 level=0
+tick=2 tgid=1 tid=1 cpu=0 level=0
+tick=2 tgid=1 tid=1 cpu=1 level=0
+tick=2 tgid=1 tid=1 cpu=2 level=0
+tick=2 tgid=1 tid=1 cpu=1 level=0
+tick=2 tgid=1 tid=1 cpu=0 level=0
+tick=2 tgid=2 tid=2 cpu=0 level=0
+tick=2 tgid=2 tid=2 cpu=1 level=0
+tick=2 tgid=2 tid=2 cpu=2 level=0
+tick=2 tgid=2 tid=2 cpu=0 level=0
+tick=2 tgid=2 tid=2 cpu=2 level=0
+tick=2 tgid=2 tid=2 cpu=1 level=0
+tick=2 tgid=2 tid=2 cpu=0 level=0
+tick=2 tgid=2 tid=2 cpu=2 level=0
+tick=2 tgid=2 tid=2 cpu=1 level=0
+tick=2 tgid=2 tid=2 cpu=0 level=0
+tick=2 tgid=2 tid=2 cpu=2 level=0
+tick=39 tgid=2 tid=2 cpu=0 level=0
+tick=39 tgid=3 tid=3 cpu=0 level=0
+tick=39 tgid=3 tid=3 cpu=1 level=0
+tick=39 tgid=3 tid=3 cpu=2 level=0
+tick=39 tgid=3 tid=3 cpu=2 level=0
+tick=39 tgid=3 tid=3 cpu=1 level=0
+tick=39 tgid=3 tid=3 cpu=2 level=0
+tick=39 tgid=3 tid=3 cpu=2 level=0
+tick=39 tgid=3 tid=4 cpu=2 level=0
+tick=39 tgid=3 tid=5 cpu=0 level=0
+tick=41 tgid=3 tid=5 cpu=0 level=1
+tick=41 tgid=3 tid=4 cpu=2 level=1
+tick=46 tgid=3 tid=4 cpu=2 level=2
+tick=48 tgid=3 tid=3 cpu=2 level=0
+tick=48 tgid=3 tid=5 cpu=2 level=0
+tick=48 tgid=3 tid=3 cpu=2 level=0
+$ schedstat_dump sched.csv
+==SCHEDSTAT_CSV_BEGIN==
+tick,tgid,tid,is_thread,state,cpu_id,priority
+1,1,1,0,4,0,0
+1,1,1,0,4,2,0
+1,1,1,0,4,2,0
+1,1,1,0,4,2,0
+1,1,1,0,4,1,0
+1,1,1,0,4,2,0
+1,1,1,0,4,1,0
+1,1,1,0,4,0,0
+1,1,1,0,4,2,0
+1,1,1,0,4,1,0
+1,1,1,0,4,2,0
+1,1,1,0,4,1,0
+1,1,1,0,4,0,0
+1,1,1,0,4,2,0
+1,1,1,0,4,1,0
+1,1,1,0,4,0,0
+1,1,1,0,4,2,0
+1,1,1,0,4,1,0
+2,1,1,0,4,2,0
+2,1,1,0,4,0,0
+2,1,1,0,4,1,0
+2,1,1,0,4,2,0
+2,1,1,0,4,1,0
+2,1,1,0,4,0,0
+2,2,2,0,4,0,0
+2,2,2,0,4,1,0
+2,2,2,0,4,2,0
+2,2,2,0,4,0,0
+2,2,2,0,4,2,0
+2,2,2,0,4,1,0
+2,2,2,0,4,0,0
+2,2,2,0,4,2,0
+2,2,2,0,4,1,0
+2,2,2,0,4,0,0
+2,2,2,0,4,2,0
+39,2,2,0,4,0,0
+39,3,3,0,4,0,0
+39,3,3,0,4,1,0
+39,3,3,0,4,2,0
+39,3,3,0,4,2,0
+39,3,3,0,4,1,0
+39,3,3,0,4,2,0
+39,3,3,0,4,2,0
+39,3,4,1,4,2,0
+39,3,5,1,4,0,0
+41,3,5,1,4,0,1
+41,3,4,1,4,2,1
+46,3,4,1,4,2,2
+48,3,3,0,4,2,0
+48,3,5,1,4,2,0
+48,3,3,0,4,2,0
+51,2,2,0,4,2,0
+118,2,2,0,4,0,0
+118,6,6,0,4,0,0
+119,6,6,0,4,2,0
+119,6,6,0,4,1,0
+119,6,6,0,4,2,0
+119,6,6,0,4,1,0
+119,6,6,0,4,2,0
+==SCHEDSTAT_CSV_END==
+$ echo QEMU_DONE_MARKER
+QEMU_DONE_MARKER
+$
