@@ -56,6 +56,7 @@ procinit(void)
   initlock(&pid_lock, "nextpid");
   initlock(&wait_lock, "wait_lock");
   schedstatinit();
+  smp_balance_init();
   for (p = proc; p < &proc[NPROC]; p++) {
     initlock(&p->lock, "proc");
     p->state = UNUSED;
@@ -144,6 +145,7 @@ found:
   // counters) — every proc, thread or otherwise, goes through here.
   mlfq_init_proc(p);
   donate_init_proc(p);
+  smp_balance_init_proc(p);
   
   // Allocate a trapframe page.
   if ((p->trapframe = (struct trapframe *)kalloc()) == 0) {
@@ -518,6 +520,7 @@ scheduler(void)
       p->state = RUNNING;
       c->proc = p;
       record_schedstat(p, cpuid());
+      smp_note_dispatch(p, cpuid());
       swtch(&c->context, &p->context);
 
       // Don't re-enable interrupts on release.
@@ -528,7 +531,10 @@ scheduler(void)
       c->proc = 0;
       release(&p->lock);
     } else {
-      // nothing to run; stop running on this core until an interrupt.
+      // nothing to run on this core right now — see if a busier CPU
+      // has RUNNABLE work we can take over (M4: SMP load balancing).
+      smp_balance_check();
+      // stop running on this core until an interrupt.
       asm volatile("wfi");
     }
   }

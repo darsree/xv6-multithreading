@@ -119,4 +119,9 @@ struct proc {
   // low = I/O-bound), used to drive adaptive quantum sizing.
   int ticks_run;
   int ema_pct;
+  // M4: last CPU this proc was dispatched on ("soft" affinity — the
+  // global sched_pick_next() scan can still run it anywhere; this is
+  // bookkeeping for smp_balance.c's imbalance tracking and shows up
+  // via getschedstat()'s cpu_id field). -1 = never dispatched yet.
+  int cpu_affinity;
 };

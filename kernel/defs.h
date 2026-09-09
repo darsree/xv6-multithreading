@@ -128,6 +128,12 @@ void            donate_init_proc(struct proc *);
 void            donate_boost(int, int);
 void            donate_restore(int);
 
+// smp_balance.c
+void            smp_balance_init(void);
+void            smp_balance_init_proc(struct proc *);
+void            smp_note_dispatch(struct proc *, int);
+void            smp_balance_check(void);
+
 int  kmutex_create(void);
 int  kmutex_lock(int);
 int  kmutex_unlock(int);
