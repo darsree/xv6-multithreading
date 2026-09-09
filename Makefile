@@ -161,6 +161,10 @@ UPROGS=\
   	$U/_schedtest\
   	$U/_schedstat_dump\
 	$U/_donatetest\
+	$U/_dtest_super\
+	$U/_racetest\
+	$U/_starvetest\
+	$U/_pinv_test\
 
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)
