@@ -29,9 +29,21 @@
 #include "smp_balance.h"
 
 extern struct proc proc[NPROC];
+extern uint ticks; // trap.c — used to rate-limit how often we re-check
 
 static struct spinlock smp_lock;
 static int cpu_load[NCPU]; // live count of procs whose cpu_affinity == that cpu
+
+// Minimum ticks between balance checks. Without this, a CPU that's idle
+// for a stretch calls smp_balance_check() on every single idle-loop pass
+// (i.e. every timer tick) — since sched_pick_next() ignores affinity, a
+// proc can get re-dispatched anywhere and flip its affinity right back,
+// so an unthrottled check just thrashes the same proc back and forth
+// (visible as dozens of repeated "migrating pid=X" log lines with the
+// same load numbers, going nowhere). This cooldown is what actually
+// stops that.
+#define SMP_BALANCE_COOLDOWN_TICKS 20
+static uint last_balance_tick = 0;
 
 void
 smp_balance_init(void)
@@ -72,6 +84,10 @@ smp_balance_check(void)
   struct proc *p;
 
   acquire(&smp_lock);
+  if (ticks - last_balance_tick < SMP_BALANCE_COOLDOWN_TICKS) {
+    release(&smp_lock);
+    return;
+  }
   my_load = cpu_load[me];
   for (int c = 0; c < NCPU; c++) {
     if (c == me)
@@ -94,6 +110,7 @@ smp_balance_check(void)
       acquire(&smp_lock);
       cpu_load[busiest]--;
       cpu_load[me]++;
+      last_balance_tick = ticks;
       release(&smp_lock);
       p->cpu_affinity = me;
       release(&p->lock);

@@ -41,6 +41,7 @@ unsafe_worker(void *arg)
 {
   for (int i = 0; i < ITERS; i++) {
     int tmp = unsafe_counter;   // read
+    for (volatile int d = 0; d < 500; d++) {}  
     tmp = tmp + 1;              // modify
     unsafe_counter = tmp;       // write -- another thread can sneak
                                  // in between this read and this write

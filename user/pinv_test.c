@@ -33,7 +33,7 @@
 // Usage (inside the xv6 shell):
 //   $ pinvtest
 //   $ schedstat_dump pinv.csv
-// then: python3 tools/viz/plot_timeline.py pinv.csv -o pinv.png
+// then: python3 tools/viz/plot_timeline.py pinv.csv pinv.png
 
 #include "kernel/types.h"
 #include "kernel/param.h"

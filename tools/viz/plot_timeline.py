@@ -17,11 +17,29 @@ exact tick it stopped running -- we approximate each bar's width as
 to a 1-tick sliver for the very last record on a core).
 
 Usage:
-    python3 plot_timeline.py schedstat.csv [output.png]
+    python3 plot_timeline.py schedstat.csv [output.png] [xmin xmax]
 
 If output.png is omitted, the plot is shown interactively instead of
 saved (falls back to saving as timeline.png if no display is
-available).
+available). xmin/xmax optionally crop the view to a tick range (e.g.
+to skip a long idle tail after your test finishes) without needing
+to edit the CSV.
+
+--- Getting a CSV out of QEMU ---
+1. make qemu-nox 2>&1 | tee console.log
+2. Inside xv6: run your test, then `schedstat_dump` (no argument
+   prints to the console; a filename argument saves inside xv6's own
+   fs.img instead, which your HOST machine can't read directly).
+3. Extract just the data lines on the host with:
+       grep -E '^[0-9]+,[0-9]+,[0-9]+,[0-9]+,[0-9]+,[0-9]+,[0-9]+$' console.log > schedstat.csv
+   Prefer this grep over matching the header line with sed -- on a
+   multi-core run, another CPU's kernel log output can interleave
+   into the middle of the header line and corrupt it, which makes a
+   header-anchored sed range silently extract nothing. Matching the
+   plain 7-integer data-line shape instead survives that. This
+   script already falls back to the correct column names when no
+   header line is present, so a headerless CSV from this grep works
+   with no extra steps.
 """
 import re
 import sys
@@ -35,6 +53,18 @@ STATE_NAMES = {0: "UNUSED", 1: "USED", 2: "SLEEPING",
 
 REQUIRED_COLS = ["tick", "tgid", "tid", "is_thread", "state", "cpu_id", "priority"]
 _ROW_RE = re.compile(r"^-?\d+(,-?\d+){6}$")
+
+# A CPU that's genuinely idle (nothing RUNNABLE) produces no schedstat
+# records at all -- the ring buffer only logs a dispatch, never "went
+# idle". Without a cap, build_bars() would stretch the last real bar
+# all the way to the next unrelated event (sometimes hundreds of ticks
+# later, e.g. the next time you happen to run schedstat_dump), which
+# LOOKS like that process kept running the whole time when it didn't.
+# Any gap longer than this is rendered as an explicit "idle" block
+# instead of silently extending the previous color.
+IDLE_SENTINEL = "__IDLE__"
+MAX_BAR_TICKS = 20
+IDLE_COLOR = "#d9d9d9"
 
 
 def load_schedstat_csv(path):
@@ -77,7 +107,14 @@ def load_schedstat_csv(path):
 def build_bars(df, cpu_col, value_col):
     """For each cpu_id, turn consecutive (tick, value) rows into
     (start, width, value) bars: each bar runs from its own tick to the
-    next record's tick on that same cpu (or +1 tick for the last one)."""
+    next record's tick on that same cpu (or a 1-tick sliver for the
+    very last record, since there's no later event to bound it).
+
+    If that gap exceeds MAX_BAR_TICKS, the CPU almost certainly went
+    idle in between rather than running the same thing the whole
+    time -- cap the real bar at MAX_BAR_TICKS and fill the remainder
+    with an explicit IDLE_SENTINEL bar instead of stretching color
+    over a gap with no supporting data."""
     bars_per_cpu = {}
     for cpu, group in df.groupby(cpu_col):
         group = group.sort_values("tick")
@@ -86,9 +123,15 @@ def build_bars(df, cpu_col, value_col):
         bars = []
         for i in range(len(ticks)):
             start = ticks[i]
-            end = ticks[i + 1] if i + 1 < len(ticks) else ticks[i] + 1
-            width = max(end - start, 1)
-            bars.append((start, width, values[i]))
+            if i + 1 < len(ticks):
+                gap = ticks[i + 1] - ticks[i]
+            else:
+                gap = 1  # last record on this cpu: no future event to bound it
+            if gap > MAX_BAR_TICKS:
+                bars.append((start, MAX_BAR_TICKS, values[i]))
+                bars.append((start + MAX_BAR_TICKS, gap - MAX_BAR_TICKS, IDLE_SENTINEL))
+            else:
+                bars.append((start, max(gap, 1), values[i]))
         bars_per_cpu[cpu] = bars
     return bars_per_cpu
 
@@ -102,9 +145,14 @@ def plot_view(ax, df, cpu_col, value_col, title, cmap_name):
 
     for row, cpu in enumerate(cpus):
         for start, width, value in bars_per_cpu[cpu]:
-            ax.broken_barh([(start, width)], (row - 0.4, 0.8),
-                            facecolors=color_for[value], edgecolors="black",
-                            linewidth=0.3)
+            if value == IDLE_SENTINEL:
+                ax.broken_barh([(start, width)], (row - 0.4, 0.8),
+                                facecolors=IDLE_COLOR, edgecolors="black",
+                                linewidth=0.3, hatch="//")
+            else:
+                ax.broken_barh([(start, width)], (row - 0.4, 0.8),
+                                facecolors=color_for[value], edgecolors="black",
+                                linewidth=0.3)
 
     ax.set_yticks(range(len(cpus)))
     ax.set_yticklabels([f"cpu{c}" for c in cpus])
@@ -113,17 +161,22 @@ def plot_view(ax, df, cpu_col, value_col, title, cmap_name):
     ax.grid(True, axis="x", alpha=0.3)
 
     patches = [mpatches.Patch(color=color_for[v], label=str(v)) for v in values]
+    patches.append(mpatches.Patch(facecolor=IDLE_COLOR, edgecolor="black",
+                                    hatch="//", label="idle (no data)"))
     ax.legend(handles=patches, title=value_col, bbox_to_anchor=(1.01, 1),
                loc="upper left", fontsize="small")
 
 
 def main():
     if len(sys.argv) < 2:
-        print("usage: plot_timeline.py <schedstat.csv> [output.png]")
+        print("usage: plot_timeline.py <schedstat.csv> [output.png] [xmin xmax]")
         sys.exit(1)
 
     csv_path = sys.argv[1]
     out_path = sys.argv[2] if len(sys.argv) > 2 else None
+    xlim = None
+    if len(sys.argv) > 4:
+        xlim = (int(sys.argv[3]), int(sys.argv[4]))
 
     df = load_schedstat_csv(csv_path)
     missing = set(REQUIRED_COLS) - set(df.columns)
@@ -136,6 +189,9 @@ def main():
               "Process/thread-group timeline (color = tgid)", "tab20")
     plot_view(ax2, df, "cpu_id", "priority",
               "Scheduler behavior (color = MLFQ queue_level)", "viridis")
+    if xlim:
+        ax1.set_xlim(*xlim)
+        ax2.set_xlim(*xlim)
     fig.tight_layout()
 
     if out_path:
