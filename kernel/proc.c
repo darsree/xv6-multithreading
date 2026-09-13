@@ -171,6 +171,63 @@ found:
   return p;
 }
 
+// Free `pagetable` (sized `sz`), correctly accounting for the case
+// where it is (or was) shared with other threads in p's tgid via
+// p->pgrefcnt. Only physically frees the shared region's physical
+// pages once the last referencing proc has dropped its mapping;
+// everyone else just drops their own PTEs.
+//
+// Takes the pagetable/sz to free as explicit arguments (rather than
+// always using p->pagetable/p->sz) so callers other than freeproc()
+// -- specifically kexec() -- can free a proc's OLD address space
+// after already having installed a new one in p->pagetable. Callers
+// must invoke this using p's thread-identity fields (is_thread,
+// ustack_base, pgrefcnt) as they describe the address space being
+// freed, i.e. before resetting/repurposing those fields.
+void
+free_shared_pagetable(struct proc *p, pagetable_t pagetable, uint64 sz)
+{
+  if (!pagetable)
+    return;
+
+  if (p->pgrefcnt) {
+    // This address space is (or was) shared with other threads in
+    // its tgid. shared_hi marks the top of the region whose physical
+    // pages are mirrored across the group:
+    //   - for a thread (is_thread): everything below its own
+    //     private stack (ustack_base)
+    //   - for the group leader: its whole [0,sz), since that's
+    //     exactly what got mirrored into every thread it spawned
+    uint64 shared_hi = p->is_thread ? p->ustack_base : sz;
+
+    // Private per-thread stack: nobody else references these
+    // physical pages, always safe to free outright.
+    if (p->is_thread && sz > shared_hi)
+      uvmunmap(pagetable, shared_hi, (PGROUNDUP(sz) - shared_hi) / PGSIZE,
+               1);
+
+    acquire(&thread_lock);
+    int refs = --(*p->pgrefcnt);
+    release(&thread_lock);
+
+    // Shared region: only physically free the underlying pages
+    // when we were the last proc in the group referencing them.
+    // Otherwise just drop our own mapping to it.
+    if (shared_hi > 0)
+      uvmunmap(pagetable, 0, PGROUNDUP(shared_hi) / PGSIZE,
+               refs == 0 ? 1 : 0);
+
+    if (refs == 0)
+      kfree((void *)p->pgrefcnt);
+
+    uvmunmap(pagetable, TRAMPOLINE, 1, 0);
+    uvmunmap(pagetable, TRAPFRAME, 1, 0);
+    freewalk(pagetable);
+  } else {
+    proc_freepagetable(pagetable, sz);
+  }
+}
+
 // free a proc structure and the data hanging from it,
 // including user pages.
 // p->lock must be held.
@@ -181,44 +238,8 @@ freeproc(struct proc *p)
     kfree((void *)p->trapframe);
   p->trapframe = 0;
 
-  if (p->pagetable) {
-    if (p->pgrefcnt) {
-      // This proc's address space is (or was) shared with other
-      // threads in its tgid. shared_hi marks the top of the region
-      // whose physical pages are mirrored across the group:
-      //   - for a thread (is_thread): everything below its own
-      //     private stack (ustack_base)
-      //   - for the group leader: its whole [0,sz), since that's
-      //     exactly what got mirrored into every thread it spawned
-      uint64 shared_hi = p->is_thread ? p->ustack_base : p->sz;
+  free_shared_pagetable(p, p->pagetable, p->sz);
 
-      // Private per-thread stack: nobody else references these
-      // physical pages, always safe to free outright.
-      if (p->is_thread && p->sz > shared_hi)
-        uvmunmap(p->pagetable, shared_hi,
-                 (PGROUNDUP(p->sz) - shared_hi) / PGSIZE, 1);
-
-      acquire(&thread_lock);
-      int refs = --(*p->pgrefcnt);
-      release(&thread_lock);
-
-      // Shared region: only physically free the underlying pages
-      // when we were the last proc in the group referencing them.
-      // Otherwise just drop our own mapping to it.
-      if (shared_hi > 0)
-        uvmunmap(p->pagetable, 0, PGROUNDUP(shared_hi) / PGSIZE,
-                 refs == 0 ? 1 : 0);
-
-      if (refs == 0)
-        kfree((void *)p->pgrefcnt);
-
-      uvmunmap(p->pagetable, TRAMPOLINE, 1, 0);
-      uvmunmap(p->pagetable, TRAPFRAME, 1, 0);
-      freewalk(p->pagetable);
-    } else {
-      proc_freepagetable(p->pagetable, p->sz);
-    }
-  }
   p->pagetable = 0;
   p->sz = 0;
   p->pid = 0;

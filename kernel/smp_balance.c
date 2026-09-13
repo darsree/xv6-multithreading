@@ -31,6 +31,15 @@
 extern struct proc proc[NPROC];
 extern uint ticks; // trap.c — used to rate-limit how often we re-check
 
+// Off by default: see the matching note in sched.c -- these printk()
+// calls were observed corrupting userspace CSV output on the shared
+// console. Build with -DSCHED_TRACE to re-enable for debugging.
+#ifdef SCHED_TRACE
+#define SCHED_LOG(...) printk(__VA_ARGS__)
+#else
+#define SCHED_LOG(...)
+#endif
+
 static struct spinlock smp_lock;
 static int cpu_load[NCPU]; // live count of procs whose cpu_affinity == that cpu
 
@@ -105,7 +114,7 @@ smp_balance_check(void)
   for (p = proc; p < &proc[NPROC]; p++) {
     acquire(&p->lock);
     if (p->state == RUNNABLE && p->cpu_affinity == busiest) {
-      printk("smp_balance: migrating pid=%d tid=%d cpu %d -> %d (load %d vs %d)\n",
+      SCHED_LOG("smp_balance: migrating pid=%d tid=%d cpu %d -> %d (load %d vs %d)\n",
              p->pid, p->tid, busiest, me, busiest_load, my_load);
       acquire(&smp_lock);
       cpu_load[busiest]--;

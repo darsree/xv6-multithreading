@@ -82,6 +82,7 @@ void            printkinit(void);
 int             cpuid(void);
 struct proc*    allocproc(void);
 void            freeproc(struct proc *);
+void            free_shared_pagetable(struct proc *, pagetable_t, uint64);
 void            kexit(int);
 int             kfork(void);
 int             growproc(int);

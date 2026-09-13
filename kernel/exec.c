@@ -131,11 +131,33 @@ kexec(char *path, char **argv)
 
   // Commit to the user image.
   oldpagetable = p->pagetable;
+  int was_shared = (p->pgrefcnt != 0); // was part of a thread group
   p->pagetable = pagetable;
   p->sz = sz;
   p->trapframe->epc = elf.entry; // initial program counter = ulib.c:start()
   p->trapframe->sp = sp;         // initial stack pointer
-  proc_freepagetable(oldpagetable, oldsz);
+
+  // M1 integration fix: exec() replaces the whole process image, so
+  // (per POSIX execve() semantics) it also ends every other thread
+  // sharing this proc's OLD address space -- otherwise their mirrored
+  // PTEs would be left pointing at pages we're about to free below.
+  // Must happen before free_shared_pagetable(), and p->is_thread /
+  // p->pgrefcnt / p->ustack_base must still describe the OLD address
+  // space when we get there, since that call needs them to safely
+  // account for the shared refcount.
+  if (was_shared)
+    thread_group_teardown(p->tgid);
+
+  free_shared_pagetable(p, oldpagetable, oldsz);
+
+  // This proc is no longer part of any thread group -- the address
+  // space it just exec'd into is private again.
+  if (was_shared) {
+    p->tgid = p->pid;
+    p->is_thread = 0;
+    p->ustack_base = 0;
+    p->pgrefcnt = 0;
+  }
 
   return argc; // this ends up in a0, the first argument to main(argc, argv)
 

@@ -37,7 +37,7 @@ record_schedstat(struct proc *p, int cpu_id)
   r->is_thread = p->is_thread;
   r->state     = p->state;
   r->cpu_id    = cpu_id;
-   r->priority  = p->queue_level;   // what donation actually modifies
+  r->priority  = p->queue_level;   // what donation actually modifies
   ring_head = (ring_head + 1) % SCHEDSTAT_RINGSIZE;
   if (ring_count < SCHEDSTAT_RINGSIZE)
     ring_count++;
@@ -48,21 +48,49 @@ int
 getschedstat(void *buf, int max)
 {
   struct proc *p = myproc();
-  static struct schedstat_rec tmp[SCHEDSTAT_RINGSIZE];
-  int n, i, start;
+  // Bug fix: this used to be a single `static` scratch buffer shared
+  // by every caller. Two processes/CPUs calling getschedstat() at
+  // the same time would race on it -- the copy into the buffer was
+  // protected by schedstat_lock, but copyout() (which can fault and
+  // so must run with the lock released) was not, so a second caller
+  // could overwrite the buffer before the first one's copyout() ran,
+  // corrupting its results. Use a per-call, page-sized chunk buffer
+  // instead: small enough for kalloc(), private to this call, so
+  // there's nothing left to race on.
+  struct schedstat_rec *chunk;
+  int n, start, sent, chunk_cap;
+
+  chunk = (struct schedstat_rec *)kalloc();
+  if (chunk == 0)
+    return -1;
+  chunk_cap = PGSIZE / sizeof(struct schedstat_rec);
 
   acquire(&schedstat_lock);
   n = ring_count;
   if (n > max)
     n = max;
   start = (ring_count < SCHEDSTAT_RINGSIZE) ? 0 : ring_head;
-  for (i = 0; i < n; i++)
-    tmp[i] = ring[(start + i) % SCHEDSTAT_RINGSIZE];
-  release(&schedstat_lock);
 
-    if (copyout(p->pagetable, p->sz, (uint64)buf, (char *)tmp,
-              n * sizeof(struct schedstat_rec)) < 0)
-    return -1;
+  sent = 0;
+  while (sent < n) {
+    int batch = n - sent;
+    if (batch > chunk_cap)
+      batch = chunk_cap;
+    for (int i = 0; i < batch; i++)
+      chunk[i] = ring[(start + sent + i) % SCHEDSTAT_RINGSIZE];
+    release(&schedstat_lock);
 
+    if (copyout(p->pagetable, p->sz,
+                (uint64)buf + sent * sizeof(struct schedstat_rec),
+                (char *)chunk, batch * sizeof(struct schedstat_rec)) < 0) {
+      kfree(chunk);
+      return -1;
+    }
+    sent += batch;
+    if (sent < n)
+      acquire(&schedstat_lock);
+  }
+
+  kfree(chunk);
   return n;
 }
