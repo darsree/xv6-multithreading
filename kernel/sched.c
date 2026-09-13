@@ -25,16 +25,6 @@
 extern struct proc proc[NPROC];
 extern uint ticks; // trap.c — used only to timestamp debug log lines below
 
-// Off by default: these printk() calls fire mid-run on the shared
-// console and were observed (see console.log) splicing themselves
-// into the middle of userspace CSV output (schedstat_dump), corrupting
-// records. Build with -DSCHED_TRACE to re-enable for debugging.
-#ifdef SCHED_TRACE
-#define SCHED_LOG(...) printk(__VA_ARGS__)
-#else
-#define SCHED_LOG(...)
-#endif
-
 // Base quantum (in timer ticks) per queue level. Level 0 is the
 // top/most-interactive queue; level NQUEUES-1 is the most CPU-bound
 // background queue. A proc's actual p->quantum starts here whenever it
@@ -92,10 +82,19 @@ mlfq_age_tick(void)
       p->wait_ticks++;
       if (p->wait_ticks > AGING_THRESHOLD) {
         if (p->queue_level != 0) {
-          SCHED_LOG("mlfq: t=%d pid=%d tid=%d STARVED level %d->0 (aged out)\n",
+          printk("mlfq: t=%d pid=%d tid=%d STARVED level %d->0 (aged out)\n",
                  ticks, p->pid, p->tid, p->queue_level);
           p->queue_level = 0;
           p->quantum = base_quantum[0];
+          // FLAW FIX: if this proc currently has an active priority
+          // donation (donated_priority != -1), donate_restore() will
+          // later reset queue_level back to whatever level was saved
+          // *before* the donation started -- silently undoing this
+          // aging promotion the moment the lock it's waiting on is
+          // freed. Keep the saved "restore to" level in sync with the
+          // promotion so a later restore can't regress it.
+          if (p->donated_priority != -1)
+            p->donated_priority = 0;
         }
         p->wait_ticks = 0;
       }
@@ -156,7 +155,7 @@ mlfq_on_switch_out(struct proc *p)
       p->queue_level--;
   }
   if (p->queue_level != old_level) {
-    SCHED_LOG("mlfq: t=%d pid=%d tid=%d level %d->%d ema=%d%% q=%d (%s)\n",
+    printk("mlfq: t=%d pid=%d tid=%d level %d->%d ema=%d%% q=%d (%s)\n",
            ticks, p->pid, p->tid, old_level, p->queue_level, p->ema_pct,
            p->quantum, fully_used ? "quantum used up" : "blocked early");
     p->quantum = base_quantum[p->queue_level];

@@ -10,11 +10,21 @@ switches, colored two ways:
                   (how MLFQ level moves over time)
 
 Each CSV row is one context-switch record: (tick, tgid, tid,
-is_thread, state, cpu_id, priority). Since the ring buffer only
-records "proc X was dispatched at tick T on cpu C", we don't know the
-exact tick it stopped running -- we approximate each bar's width as
-"runs until the next record on the same cpu_id begins" (falling back
-to a 1-tick sliver for the very last record on a core).
+is_thread, state, cpu_id, priority). The kernel now logs TWO records
+per run: a "start" record when a proc is dispatched (state==RUNNING)
+and a "stop" record at the exact tick it gives the CPU back (state is
+whatever it transitioned to -- RUNNABLE/SLEEPING/ZOMBIE -- which is
+never RUNNING). That lets this script draw each bar with its real,
+exact width instead of guessing, and any gap between a stop record
+and the next start record on that cpu is genuine, *measured* idle
+time -- not an inferred one.
+
+Older-format CSVs that only contain start records (no matching stop
+row right after each start) are still supported: this script falls
+back to the old approximation -- "runs until the next record on the
+same cpu_id begins," capped at MAX_BAR_TICKS with the remainder drawn
+as an explicit idle block -- so you don't need to regenerate old data
+to use this script.
 
 Usage:
     python3 plot_timeline.py schedstat.csv [output.png] [xmin xmax]
@@ -54,17 +64,24 @@ STATE_NAMES = {0: "UNUSED", 1: "USED", 2: "SLEEPING",
 REQUIRED_COLS = ["tick", "tgid", "tid", "is_thread", "state", "cpu_id", "priority"]
 _ROW_RE = re.compile(r"^-?\d+(,-?\d+){6}$")
 
-# A CPU that's genuinely idle (nothing RUNNABLE) produces no schedstat
-# records at all -- the ring buffer only logs a dispatch, never "went
-# idle". Without a cap, build_bars() would stretch the last real bar
-# all the way to the next unrelated event (sometimes hundreds of ticks
-# later, e.g. the next time you happen to run schedstat_dump), which
-# LOOKS like that process kept running the whole time when it didn't.
-# Any gap longer than this is rendered as an explicit "idle" block
-# instead of silently extending the previous color.
+# LEGACY-MODE ONLY (see build_bars_legacy() below): a CPU that's
+# genuinely idle produces no record at all in the old start-only
+# format, so a gap has to be guessed at. Any legacy gap longer than
+# this is rendered as an explicit "idle" block instead of silently
+# extending the previous color as if the CPU ran that long.
+#
+# FLAW FIX: this used to be 20, but kernel/sched.c's adaptive quantum
+# can legitimately grow a single dispatch's run up to
+# MLFQ_MAX_QUANTUM == 32 ticks (see the IO_BOUND_PCT growth path in
+# mlfq_on_switch_out()). With a 20-tick cap, any genuinely full-speed
+# 21-32 tick run got chopped at 20 and the remainder mislabeled idle
+# even though the CPU never stopped. Matching the real kernel constant
+# here removes that false positive. (This whole class of guesswork is
+# now avoided entirely in exact mode -- see build_bars_exact().)
 IDLE_SENTINEL = "__IDLE__"
-MAX_BAR_TICKS = 20
+MAX_BAR_TICKS = 32  # == kernel/sched.c MLFQ_MAX_QUANTUM
 IDLE_COLOR = "#d9d9d9"
+RUNNING_STATE = 4  # enum procstate RUNNING, from kernel/proc.h
 
 
 def load_schedstat_csv(path):
@@ -104,35 +121,68 @@ def load_schedstat_csv(path):
     return pd.DataFrame(rows, columns=header or REQUIRED_COLS)
 
 
-def build_bars(df, cpu_col, value_col):
-    """For each cpu_id, turn consecutive (tick, value) rows into
-    (start, width, value) bars: each bar runs from its own tick to the
-    next record's tick on that same cpu (or a 1-tick sliver for the
-    very last record, since there's no later event to bound it).
+def build_bars_legacy(ticks, states, values):
+    """Old approximation, kept as a fallback for CSVs that only ever
+    logged a dispatch ("start") record and never a matching stop
+    record. Each bar runs from its own tick to the next record's tick
+    on that same cpu (or a 1-tick sliver for the very last record).
+    Any gap over MAX_BAR_TICKS is capped and the remainder drawn as an
+    explicit idle block, since the CPU almost certainly went idle
+    rather than having run the same thing that whole time."""
+    bars = []
+    for i in range(len(ticks)):
+        start = ticks[i]
+        gap = ticks[i + 1] - ticks[i] if i + 1 < len(ticks) else 1
+        if gap > MAX_BAR_TICKS:
+            bars.append((start, MAX_BAR_TICKS, values[i]))
+            bars.append((start + MAX_BAR_TICKS, gap - MAX_BAR_TICKS, IDLE_SENTINEL))
+        else:
+            bars.append((start, max(gap, 1), values[i]))
+    return bars
 
-    If that gap exceeds MAX_BAR_TICKS, the CPU almost certainly went
-    idle in between rather than running the same thing the whole
-    time -- cap the real bar at MAX_BAR_TICKS and fill the remainder
-    with an explicit IDLE_SENTINEL bar instead of stretching color
-    over a gap with no supporting data."""
+
+def build_bars_exact(ticks, states, values):
+    """Pairs each start record (state == RUNNING) with the very next
+    record on the same cpu, which is that run's own stop record (any
+    non-RUNNING state, logged from sched() at the exact tick it gives
+    up the cpu -- see kernel/proc.c). Bar width is then exact, not
+    guessed, and any gap between a stop record and the next start
+    record is genuine, measured idle time (not capped/inferred)."""
+    bars = []
+    i = 0
+    n = len(ticks)
+    while i < n:
+        if states[i] == RUNNING_STATE and i + 1 < n and states[i + 1] != RUNNING_STATE:
+            start, end = ticks[i], ticks[i + 1]
+            bars.append((start, max(end - start, 1), values[i]))
+            i += 2
+            # Real, measured idle gap until the next dispatch on this cpu.
+            if i < n and ticks[i] > end:
+                bars.append((end, ticks[i] - end, IDLE_SENTINEL))
+        else:
+            # Stray/last record with no pairing available (e.g. a start
+            # with nothing after it in the capture window) -- draw a
+            # thin sliver rather than guessing a width for it.
+            bars.append((ticks[i], 1, values[i]))
+            i += 1
+    return bars
+
+
+def build_bars(df, cpu_col, value_col):
+    """Dispatches to exact-pairing mode whenever the CSV actually
+    contains stop records (any non-RUNNING state), and falls back to
+    the legacy single-event approximation for older captures that
+    don't."""
+    exact_mode = (df["state"] != RUNNING_STATE).any()
+    build_fn = build_bars_exact if exact_mode else build_bars_legacy
+
     bars_per_cpu = {}
     for cpu, group in df.groupby(cpu_col):
         group = group.sort_values("tick")
         ticks = group["tick"].to_numpy()
+        states = group["state"].to_numpy()
         values = group[value_col].to_numpy()
-        bars = []
-        for i in range(len(ticks)):
-            start = ticks[i]
-            if i + 1 < len(ticks):
-                gap = ticks[i + 1] - ticks[i]
-            else:
-                gap = 1  # last record on this cpu: no future event to bound it
-            if gap > MAX_BAR_TICKS:
-                bars.append((start, MAX_BAR_TICKS, values[i]))
-                bars.append((start + MAX_BAR_TICKS, gap - MAX_BAR_TICKS, IDLE_SENTINEL))
-            else:
-                bars.append((start, max(gap, 1), values[i]))
-        bars_per_cpu[cpu] = bars
+        bars_per_cpu[cpu] = build_fn(ticks, states, values)
     return bars_per_cpu
 
 
