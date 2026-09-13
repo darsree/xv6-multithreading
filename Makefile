@@ -165,6 +165,7 @@ UPROGS=\
 	$U/_racetest\
 	$U/_starvetest\
 	$U/_pinv_test\
+	$U/_threadexe_test\
 
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)
