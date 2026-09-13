@@ -31,15 +31,6 @@
 extern struct proc proc[NPROC];
 extern uint ticks; // trap.c — used to rate-limit how often we re-check
 
-// Off by default: see the matching note in sched.c -- these printk()
-// calls were observed corrupting userspace CSV output on the shared
-// console. Build with -DSCHED_TRACE to re-enable for debugging.
-#ifdef SCHED_TRACE
-#define SCHED_LOG(...) printk(__VA_ARGS__)
-#else
-#define SCHED_LOG(...)
-#endif
-
 static struct spinlock smp_lock;
 static int cpu_load[NCPU]; // live count of procs whose cpu_affinity == that cpu
 
@@ -106,6 +97,14 @@ smp_balance_check(void)
       busiest = c;
     }
   }
+  // FLAW FIX: stamp the cooldown here, as soon as we've actually done
+  // a check -- not only inside the "found something to migrate"
+  // branch below. Previously, an idle CPU that passed the imbalance
+  // test but then lost the race for a candidate proc (e.g. it was
+  // re-dispatched elsewhere in between) left last_balance_tick
+  // untouched, so the very next tick would immediately retry with no
+  // cooldown at all, defeating the whole point of the throttle.
+  last_balance_tick = ticks;
   release(&smp_lock);
 
   if (busiest < 0 || busiest_load - my_load < SMP_IMBALANCE_THRESHOLD)
@@ -114,12 +113,11 @@ smp_balance_check(void)
   for (p = proc; p < &proc[NPROC]; p++) {
     acquire(&p->lock);
     if (p->state == RUNNABLE && p->cpu_affinity == busiest) {
-      SCHED_LOG("smp_balance: migrating pid=%d tid=%d cpu %d -> %d (load %d vs %d)\n",
+      printk("smp_balance: migrating pid=%d tid=%d cpu %d -> %d (load %d vs %d)\n",
              p->pid, p->tid, busiest, me, busiest_load, my_load);
       acquire(&smp_lock);
       cpu_load[busiest]--;
       cpu_load[me]++;
-      last_balance_tick = ticks;
       release(&smp_lock);
       p->cpu_affinity = me;
       release(&p->lock);

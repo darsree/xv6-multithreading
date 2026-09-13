@@ -24,20 +24,12 @@
 
 extern struct proc proc[NPROC];
 
-// Off by default: see the matching note in sched.c -- these printk()
-// calls were observed corrupting userspace CSV output on the shared
-// console. Build with -DSCHED_TRACE to re-enable for debugging.
-#ifdef SCHED_TRACE
-#define SCHED_LOG(...) printk(__VA_ARGS__)
-#else
-#define SCHED_LOG(...)
-#endif
-
 // Call once per proc, from allocproc(), alongside mlfq_init_proc().
 void
 donate_init_proc(struct proc *p)
 {
   p->donated_priority = -1; // -1 = not currently boosted
+  p->nlocks_held = 0;
 }
 
 // owner_pid: pid of the mutex holder (from m->owner).
@@ -58,7 +50,7 @@ donate_boost(int owner_pid, int blocker_level)
       if (p->donated_priority == -1)
         p->donated_priority = p->queue_level; // save original, first boost only
       if (blocker_level < p->queue_level) {
-        SCHED_LOG("donate: pid=%d BOOST level %d -> %d (blocker wants %d)\n",
+        printk("donate: pid=%d BOOST level %d -> %d (blocker wants %d)\n",
                p->pid, p->queue_level, blocker_level, blocker_level);
         p->queue_level = blocker_level;
       }
@@ -70,8 +62,22 @@ donate_boost(int owner_pid, int blocker_level)
 }
 
 // Restore the (former) owner's queue_level to what it was before any
-// donation. Simple version — single active donation at a time, which
-// matches kmutex_lock's one-owner-at-a-time model.
+// donation.
+//
+// FLAW FIX: this used to be called unconditionally from every
+// kmutex_unlock(), which is wrong whenever the owner holds MORE THAN
+// ONE kmutex at a time. donated_priority only remembers the level
+// from the FIRST boost (donate_boost() only sets it when it's -1), so
+// restoring on the first unlock wipes that bookkeeping even if a
+// second, still-held lock has its own waiter relying on the boost —
+// the owner's priority prematurely drops back down, and priority
+// inversion protection lapses until the next kmutex_lock() spin
+// iteration re-donates.
+//
+// The caller (kmutex_unlock() in sync.c) now only invokes this once
+// the owner's p->nlocks_held has dropped to 0, i.e. once it no longer
+// holds ANY kmutex — so a boost granted for lock A can't be erased by
+// releasing unrelated lock B while A (or C, D...) is still held.
 void
 donate_restore(int pid)
 {
@@ -84,7 +90,7 @@ donate_restore(int pid)
     acquire(&p->lock);
     if (p->pid == pid) {
       if (p->donated_priority != -1) {
-        SCHED_LOG("donate: pid=%d RESTORE level %d -> %d\n",
+        printk("donate: pid=%d RESTORE level %d -> %d\n",
                p->pid, p->queue_level, p->donated_priority);
         p->queue_level = p->donated_priority;
         p->donated_priority = -1;

@@ -112,6 +112,10 @@ struct proc {
   int wait_ticks;
   int quantum;
   int donated_priority;
+  // M2/M4: how many kmutexes this proc currently holds. Used to defer
+  // donate_restore() until the LAST held lock is released, instead of
+  // restoring on every single kmutex_unlock() — see sync.c/donate.c.
+  int nlocks_held;
   // M3: MLFQ scheduler bookkeeping (owned by sched.c). ticks_run counts
   // ticks used in the CURRENT run (reset each dispatch/switch-out);
   // ema_pct is a 0-100 exponential moving average of how much of its

@@ -87,6 +87,11 @@ kmutex_lock(int id)
   m->locked = 1;
   m->owner = myproc()->pid;
   release(&m->lk);
+
+  acquire(&myproc()->lock);
+  myproc()->nlocks_held++;
+  release(&myproc()->lock);
+
   return 0;
 }
 
@@ -102,10 +107,25 @@ kmutex_unlock(int id)
     release(&m->lk);
     return -1;
   }
-  donate_restore(m->owner);
   m->locked = 0;
   m->owner = -1;
   release(&m->lk);
+
+  // FLAW FIX: only give back the donated priority once the owner (the
+  // caller, since only the holder unlocks) no longer holds ANY
+  // kmutex — releasing one lock must not erase a boost that's still
+  // owed for a different, still-held lock. See donate_restore()'s
+  // comment in donate.c for the full story.
+  struct proc *me = myproc();
+  acquire(&me->lock);
+  if (me->nlocks_held > 0)
+    me->nlocks_held--;
+  int last_lock = (me->nlocks_held == 0);
+  release(&me->lock);
+
+  if (last_lock)
+    donate_restore(me->pid);
+
   wakeup(m); // thundering herd is fine: exactly one re-acquires, rest re-sleep
   return 0;
 }
