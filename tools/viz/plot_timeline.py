@@ -9,25 +9,26 @@ switches, colored two ways:
   2. by queue_level ("priority" column) -> scheduler-behavior view
                   (how MLFQ level moves over time)
 
-Each CSV row is one context-switch record: (tick, tgid, tid,
-is_thread, state, cpu_id, priority). The kernel now logs TWO records
-per run: a "start" record when a proc is dispatched (state==RUNNING)
-and a "stop" record at the exact tick it gives the CPU back (state is
-whatever it transitioned to -- RUNNABLE/SLEEPING/ZOMBIE -- which is
-never RUNNING). That lets this script draw each bar with its real,
-exact width instead of guessing, and any gap between a stop record
-and the next start record on that cpu is genuine, *measured* idle
-time -- not an inferred one.
+Each dispatch is now logged TWICE: once when scheduler() picks a proc
+(state=RUNNING), and once when sched() switches it back out (state=
+whatever it becomes next -- RUNNABLE/SLEEPING/ZOMBIE, never RUNNING).
+On a given cpu these always alternate start, stop, start, stop... for
+the SAME tgid/tid, so bars are drawn from the exact start tick to the
+exact stop tick -- no guessing, and genuine idle stretches (no bars at
+all) show up as real blank/idle gaps rather than being confused with
+activity. Older CSVs that only have start records (no stop events)
+still work via a capped fallback (see build_bars_legacy).
 
-Older-format CSVs that only contain start records (no matching stop
-row right after each start) are still supported: this script falls
-back to the old approximation -- "runs until the next record on the
-same cpu_id begins," capped at MAX_BAR_TICKS with the remainder drawn
-as an explicit idle block -- so you don't need to regenerate old data
-to use this script.
+On top of the timeline, this script can also overlay the actual
+donation/starvation events for THIS run -- parsed straight out of a
+QEMU console.log passed with --events. Nothing is hardcoded per test:
+whatever donate:/mlfq: STARVED lines actually happened in that
+specific run are what gets drawn, so the same script adapts to
+donatetest, pinv_test, dtest_super, starvetest, etc. without needing a
+different chart type per test.
 
 Usage:
-    python3 plot_timeline.py schedstat.csv [output.png] [xmin xmax]
+    python3 plot_timeline.py schedstat.csv [output.png] [--events console.log] [xmin xmax]
 
 If output.png is omitted, the plot is shown interactively instead of
 saved (falls back to saving as timeline.png if no display is
@@ -48,8 +49,10 @@ to edit the CSV.
    header-anchored sed range silently extract nothing. Matching the
    plain 7-integer data-line shape instead survives that. This
    script already falls back to the correct column names when no
-   header line is present, so a headerless CSV from this grep works
-   with no extra steps.
+   header line is present.
+4. To also see donation/starvation events overlaid on the chart, pass
+   the SAME console.log with --events:
+       python3 plot_timeline.py schedstat.csv out.png --events console.log
 """
 import re
 import sys
@@ -57,31 +60,31 @@ import pandas as pd
 import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
+import matplotlib.lines as mlines
 
 STATE_NAMES = {0: "UNUSED", 1: "USED", 2: "SLEEPING",
                3: "RUNNABLE", 4: "RUNNING", 5: "ZOMBIE"}
+RUNNING = 4
 
 REQUIRED_COLS = ["tick", "tgid", "tid", "is_thread", "state", "cpu_id", "priority"]
 _ROW_RE = re.compile(r"^-?\d+(,-?\d+){6}$")
 
-# LEGACY-MODE ONLY (see build_bars_legacy() below): a CPU that's
-# genuinely idle produces no record at all in the old start-only
-# format, so a gap has to be guessed at. Any legacy gap longer than
-# this is rendered as an explicit "idle" block instead of silently
-# extending the previous color as if the CPU ran that long.
-#
-# FLAW FIX: this used to be 20, but kernel/sched.c's adaptive quantum
-# can legitimately grow a single dispatch's run up to
-# MLFQ_MAX_QUANTUM == 32 ticks (see the IO_BOUND_PCT growth path in
-# mlfq_on_switch_out()). With a 20-tick cap, any genuinely full-speed
-# 21-32 tick run got chopped at 20 and the remainder mislabeled idle
-# even though the CPU never stopped. Matching the real kernel constant
-# here removes that false positive. (This whole class of guesswork is
-# now avoided entirely in exact mode -- see build_bars_exact().)
+# Legacy fallback (only used for old CSVs with start-only records, no
+# stop events): a gap longer than this is assumed to be idle time
+# rather than the same proc still running, and rendered as an explicit
+# "idle" block instead of silently stretching the previous color.
 IDLE_SENTINEL = "__IDLE__"
-MAX_BAR_TICKS = 32  # == kernel/sched.c MLFQ_MAX_QUANTUM
+MAX_BAR_TICKS = 20
 IDLE_COLOR = "#d9d9d9"
-RUNNING_STATE = 4  # enum procstate RUNNING, from kernel/proc.h
+
+# Event lines worth overlaying -- deliberately NOT the routine "quantum
+# used up" demotion lines (those fire constantly and would clutter the
+# chart; they're already visible as color changes in the priority
+# panel). Only the rare, meaningful ones: donation boost/restore, and
+# aging force-promotions.
+_BOOST_RE = re.compile(r"donate: t=(\d+) pid=(\d+) BOOST level (\d+) -> (\d+)")
+_RESTORE_RE = re.compile(r"donate: t=(\d+) pid=(\d+) RESTORE level (\d+) -> (\d+)")
+_STARVED_RE = re.compile(r"mlfq: t=(\d+) pid=(\d+) tid=(\d+) STARVED level (\d+)->0")
 
 
 def load_schedstat_csv(path):
@@ -121,72 +124,130 @@ def load_schedstat_csv(path):
     return pd.DataFrame(rows, columns=header or REQUIRED_COLS)
 
 
-def build_bars_legacy(ticks, states, values):
-    """Old approximation, kept as a fallback for CSVs that only ever
-    logged a dispatch ("start") record and never a matching stop
-    record. Each bar runs from its own tick to the next record's tick
-    on that same cpu (or a 1-tick sliver for the very last record).
-    Any gap over MAX_BAR_TICKS is capped and the remainder drawn as an
-    explicit idle block, since the CPU almost certainly went idle
-    rather than having run the same thing that whole time."""
-    bars = []
-    for i in range(len(ticks)):
-        start = ticks[i]
-        gap = ticks[i + 1] - ticks[i] if i + 1 < len(ticks) else 1
-        if gap > MAX_BAR_TICKS:
-            bars.append((start, MAX_BAR_TICKS, values[i]))
-            bars.append((start + MAX_BAR_TICKS, gap - MAX_BAR_TICKS, IDLE_SENTINEL))
-        else:
-            bars.append((start, max(gap, 1), values[i]))
-    return bars
+def extract_events(path):
+    """Scan a raw QEMU console.log for donation/starvation lines and
+    return them as a flat list of (tick, label, kind) tuples. This is
+    what makes the chart "dynamic per test": nothing here is specific
+    to any one test program, it just reports whatever actually
+    happened in this particular run."""
+    events = []
+    with open(path) as f:
+        for raw in f:
+            m = _BOOST_RE.search(raw)
+            if m:
+                t, pid, frm, to = m.groups()
+                events.append((int(t), f"pid{pid} BOOST {frm}->{to}", "boost"))
+                continue
+            m = _RESTORE_RE.search(raw)
+            if m:
+                t, pid, frm, to = m.groups()
+                events.append((int(t), f"pid{pid} RESTORE {frm}->{to}", "restore"))
+                continue
+            m = _STARVED_RE.search(raw)
+            if m:
+                t, pid, tid, frm = m.groups()
+                events.append((int(t), f"pid{pid}/tid{tid} aged out", "starved"))
+    return sorted(events, key=lambda e: e[0])
 
 
-def build_bars_exact(ticks, states, values):
-    """Pairs each start record (state == RUNNING) with the very next
-    record on the same cpu, which is that run's own stop record (any
-    non-RUNNING state, logged from sched() at the exact tick it gives
-    up the cpu -- see kernel/proc.c). Bar width is then exact, not
-    guessed, and any gap between a stop record and the next start
-    record is genuine, measured idle time (not capped/inferred)."""
-    bars = []
-    i = 0
-    n = len(ticks)
-    while i < n:
-        if states[i] == RUNNING_STATE and i + 1 < n and states[i + 1] != RUNNING_STATE:
-            start, end = ticks[i], ticks[i + 1]
-            bars.append((start, max(end - start, 1), values[i]))
-            i += 2
-            # Real, measured idle gap until the next dispatch on this cpu.
-            if i < n and ticks[i] > end:
-                bars.append((end, ticks[i] - end, IDLE_SENTINEL))
+def cluster_events(events, window=5):
+    """Merge consecutive same-kind events that land within `window`
+    ticks of each other into one summary label (e.g. three near-
+    identical "RESTORE 3->3" noise events three ticks apart become
+    one "3x restore (t=55-58)" label) -- otherwise they just overlap
+    into illegible stacked text. Deliberately never merges DIFFERENT
+    kinds together, even if close in tick: a real BOOST followed a
+    few ticks later by its matching RESTORE is exactly the pairing
+    this chart exists to show, so those two stay as separate,
+    clearly labeled events no matter how close together they are."""
+    if not events:
+        return events
+    clustered = []
+    group = [events[0]]
+    for e in events[1:]:
+        if e[2] == group[-1][2] and e[0] - group[-1][0] <= window:
+            group.append(e)
         else:
-            # Stray/last record with no pairing available (e.g. a start
-            # with nothing after it in the capture window) -- draw a
-            # thin sliver rather than guessing a width for it.
-            bars.append((ticks[i], 1, values[i]))
-            i += 1
-    return bars
+            clustered.append(_merge_group(group))
+            group = [e]
+    clustered.append(_merge_group(group))
+    return clustered
+
+
+def _merge_group(group):
+    if len(group) == 1:
+        return group[0]
+    tick, _, kind = group[0]
+    last_tick = group[-1][0]
+    label = f"{len(group)}x {kind} (t={tick}-{last_tick})"
+    return (tick, label, kind)
 
 
 def build_bars(df, cpu_col, value_col):
-    """Dispatches to exact-pairing mode whenever the CSV actually
-    contains stop records (any non-RUNNING state), and falls back to
-    the legacy single-event approximation for older captures that
-    don't."""
-    exact_mode = (df["state"] != RUNNING_STATE).any()
-    build_fn = build_bars_exact if exact_mode else build_bars_legacy
+    """Preferred path: pair each RUNNING (start) record with its very
+    next record on the same cpu for the same tgid/tid (the stop event
+    logged by sched() before switching away) for an EXACT bar. Falls
+    back to the old capped-guess approach only if the CSV has no stop
+    events at all (state is RUNNING on every row -- an old-format
+    capture)."""
+    has_stop_events = (df["state"] != RUNNING).any()
+    if not has_stop_events:
+        return build_bars_legacy(df, cpu_col, value_col)
 
+    bars_per_cpu = {}
+    for cpu, group in df.groupby(cpu_col):
+        group = group.sort_values("tick").reset_index(drop=True)
+        bars = []
+        i, n = 0, len(group)
+        while i < n:
+            row = group.iloc[i]
+            if row["state"] == RUNNING:
+                start_tick = row["tick"]
+                value = row[value_col]
+                nxt = group.iloc[i + 1] if i + 1 < n else None
+                if (nxt is not None and nxt["state"] != RUNNING
+                        and nxt["tgid"] == row["tgid"] and nxt["tid"] == row["tid"]):
+                    width = max(nxt["tick"] - start_tick, 1)
+                    i += 2
+                else:
+                    # no matching stop captured (e.g. still running when
+                    # the ring buffer was dumped) -- draw a small sliver
+                    # rather than guessing how long it ran.
+                    width = 1
+                    i += 1
+                bars.append((start_tick, width, value))
+            else:
+                # an orphan stop record with no start in this window
+                # (can happen right at the start of a capture) -- skip it,
+                # it carries no new bar of its own.
+                i += 1
+        bars_per_cpu[cpu] = bars
+    return bars_per_cpu
+
+
+def build_bars_legacy(df, cpu_col, value_col):
+    """Old behavior, kept for CSVs captured before the exact stop-event
+    logging existed: each bar runs until the next record on the same
+    cpu, capped at MAX_BAR_TICKS with the remainder drawn as idle."""
     bars_per_cpu = {}
     for cpu, group in df.groupby(cpu_col):
         group = group.sort_values("tick")
         ticks = group["tick"].to_numpy()
-        states = group["state"].to_numpy()
         values = group[value_col].to_numpy()
-        bars_per_cpu[cpu] = build_fn(ticks, states, values)
+        bars = []
+        for i in range(len(ticks)):
+            start = ticks[i]
+            gap = ticks[i + 1] - ticks[i] if i + 1 < len(ticks) else 1
+            if gap > MAX_BAR_TICKS:
+                bars.append((start, MAX_BAR_TICKS, values[i]))
+                bars.append((start + MAX_BAR_TICKS, gap - MAX_BAR_TICKS, IDLE_SENTINEL))
+            else:
+                bars.append((start, max(gap, 1), values[i]))
+        bars_per_cpu[cpu] = bars
     return bars_per_cpu
 
 
-def plot_view(ax, df, cpu_col, value_col, title, cmap_name):
+def plot_view(ax, df, cpu_col, value_col, title, cmap_name, events=None):
     bars_per_cpu = build_bars(df, cpu_col, value_col)
     cpus = sorted(bars_per_cpu.keys())
     values = sorted(df[value_col].unique())
@@ -210,23 +271,53 @@ def plot_view(ax, df, cpu_col, value_col, title, cmap_name):
     ax.set_title(title)
     ax.grid(True, axis="x", alpha=0.3)
 
+    EVENT_COLOR = {"boost": "#d62728", "restore": "#2ca02c", "starved": "#9467bd"}
+    if events:
+        ylim = ax.get_ylim()
+        yspan = ylim[1] - ylim[0]
+        # Stagger label heights in a repeating pattern so events that
+        # land close together in tick don't overlap into illegible
+        # stacked text -- each successive event (in tick order) goes
+        # one step higher, cycling through a few offset levels.
+        n_levels = 4
+        for idx, (tick, label, kind) in enumerate(events):
+            color = EVENT_COLOR.get(kind, "black")
+            ax.axvline(tick, color=color, linestyle="--", linewidth=1, alpha=0.8)
+            y = ylim[1] + (idx % n_levels) * 0.55 * yspan
+            ax.text(tick, y, label, rotation=90, va="bottom", ha="center",
+                    fontsize=7, color=color)
+
     patches = [mpatches.Patch(color=color_for[v], label=str(v)) for v in values]
-    patches.append(mpatches.Patch(facecolor=IDLE_COLOR, edgecolor="black",
-                                    hatch="//", label="idle (no data)"))
+    used_idle = any(v == IDLE_SENTINEL for bars in bars_per_cpu.values() for _, _, v in bars)
+    if used_idle:
+        patches.append(mpatches.Patch(facecolor=IDLE_COLOR, edgecolor="black",
+                                        hatch="//", label="idle (no data)"))
+    if events:
+        seen_kinds = {k for _, _, k in events}
+        for kind in ("boost", "restore", "starved"):
+            if kind in seen_kinds:
+                patches.append(mlines.Line2D([], [], color=EVENT_COLOR[kind],
+                                              linestyle="--", label=kind))
     ax.legend(handles=patches, title=value_col, bbox_to_anchor=(1.01, 1),
                loc="upper left", fontsize="small")
 
 
 def main():
-    if len(sys.argv) < 2:
-        print("usage: plot_timeline.py <schedstat.csv> [output.png] [xmin xmax]")
+    argv = sys.argv[1:]
+    events_path = None
+    if "--events" in argv:
+        idx = argv.index("--events")
+        events_path = argv[idx + 1]
+        del argv[idx:idx + 2]
+
+    if len(argv) < 1:
+        print("usage: plot_timeline.py <schedstat.csv> [output.png] "
+              "[--events console.log] [xmin xmax]")
         sys.exit(1)
 
-    csv_path = sys.argv[1]
-    out_path = sys.argv[2] if len(sys.argv) > 2 else None
-    xlim = None
-    if len(sys.argv) > 4:
-        xlim = (int(sys.argv[3]), int(sys.argv[4]))
+    csv_path = argv[0]
+    out_path = argv[1] if len(argv) > 1 else None
+    xlim = (int(argv[2]), int(argv[3])) if len(argv) > 3 else None
 
     df = load_schedstat_csv(csv_path)
     missing = set(REQUIRED_COLS) - set(df.columns)
@@ -234,11 +325,20 @@ def main():
         print(f"plot_timeline: CSV missing columns: {missing}")
         sys.exit(1)
 
+    events = extract_events(events_path) if events_path else None
+    if events_path and not events:
+        print(f"plot_timeline: --events given but no donate:/STARVED lines "
+              f"found in {events_path} (fine for tests like racetest that "
+              f"don't exercise donation)")
+    if events:
+        events = cluster_events(events)
+
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 6), sharex=True)
     plot_view(ax1, df, "cpu_id", "tgid",
               "Process/thread-group timeline (color = tgid)", "tab20")
     plot_view(ax2, df, "cpu_id", "priority",
-              "Scheduler behavior (color = MLFQ queue_level)", "viridis")
+              "Scheduler behavior (color = MLFQ queue_level)", "viridis",
+              events=events)
     if xlim:
         ax1.set_xlim(*xlim)
         ax2.set_xlim(*xlim)

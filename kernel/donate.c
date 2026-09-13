@@ -23,6 +23,9 @@
 #include "donate.h"
 
 extern struct proc proc[NPROC];
+extern uint ticks; // trap.c — timestamp donation events so they can be
+                   // correlated with the schedstat timeline (mlfq's
+                   // printk lines already do this; donation's didn't).
 
 // Call once per proc, from allocproc(), alongside mlfq_init_proc().
 void
@@ -47,11 +50,21 @@ donate_boost(int owner_pid, int blocker_level)
   for (p = proc; p < &proc[NPROC]; p++) {
     acquire(&p->lock);
     if (p->pid == owner_pid) {
-      if (p->donated_priority == -1)
-        p->donated_priority = p->queue_level; // save original, first boost only
+      // BUG FIX: this used to save donated_priority unconditionally,
+      // before checking whether a boost was actually warranted. That
+      // meant ANY contended mutex -- including an ordinary, harmless
+      // one like a print-serializing lock shared by same-priority
+      // threads -- got marked as "donation active," even though
+      // queue_level was never touched. donate_restore() would then
+      // fire later and print a meaningless "RESTORE 3 -> 3" (no
+      // actual change) on completely uneventful mutex use, burying
+      // the real donation events in noise. Only save/boost when the
+      // blocker is genuinely more urgent.
       if (blocker_level < p->queue_level) {
-        printk("donate: pid=%d BOOST level %d -> %d (blocker wants %d)\n",
-               p->pid, p->queue_level, blocker_level, blocker_level);
+        if (p->donated_priority == -1)
+          p->donated_priority = p->queue_level; // save original, first boost only
+        printk("donate: t=%d pid=%d BOOST level %d -> %d (blocker wants %d)\n",
+               ticks, p->pid, p->queue_level, blocker_level, blocker_level);
         p->queue_level = blocker_level;
       }
       release(&p->lock);
@@ -90,8 +103,8 @@ donate_restore(int pid)
     acquire(&p->lock);
     if (p->pid == pid) {
       if (p->donated_priority != -1) {
-        printk("donate: pid=%d RESTORE level %d -> %d\n",
-               p->pid, p->queue_level, p->donated_priority);
+        printk("donate: t=%d pid=%d RESTORE level %d -> %d\n",
+               ticks, p->pid, p->queue_level, p->donated_priority);
         p->queue_level = p->donated_priority;
         p->donated_priority = -1;
       }

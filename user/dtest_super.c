@@ -34,7 +34,7 @@
 // regardless of how fast the underlying machine is.
 //
 // Usage (inside the xv6 shell):
-//   $ don_super
+//   $ dtest_super
 //   $ schedstat_dump sched.csv
 // then pull sched.csv out (see tools/viz/plot_timeline.py's docstring)
 // and run the plotting script on your host.
@@ -193,11 +193,11 @@ main(int argc, char *argv[])
   mid = mutex_create();
   pmid = mutex_create();
   if (mid < 0 || pmid < 0) {
-    printf("don_super: mutex_create failed\n");
+    printf("dtest_super: mutex_create failed\n");
     exit(1);
   }
 
-  printf("don_super: launching %d hogs, %d io threads, "
+  printf("dtest_super: launching %d hogs, %d io threads, "
          "1 starved thread, low/high donation pair (~%d ticks)\n",
          NHOGS, NIO, DURATION);
 
@@ -225,9 +225,6 @@ main(int argc, char *argv[])
   thread_join(low_tid);
   thread_join(high_tid);
 
-  printf("don_super: all threads joined. Now run:\n");
-  printf("  schedstat_dump sched.csv\n");
-  printf("to pull the ring buffer this run just filled.\n");
-
+  printf("dtest_super: all threads joined.\n");
   exit(0);
 }
