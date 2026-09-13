@@ -22,6 +22,17 @@
 // demonstrating "threads, not processes" to a professor who's used to
 // seeing xv6 demos as separate forked processes.
 //
+// TIMING FIX (see NOTE below): every phase is now driven off uptime()
+// tick counts instead of raw burn-loop iteration counts, so the demo
+// is deterministic across hosts of different speed. With the old
+// fixed-iteration burns, on a fast host `low`'s 50M-iteration warmup
+// and `high`'s 60M-iteration warmup finished only ~1 tick apart, so
+// `low` frequently released the mutex before `high` ever called
+// mutex_lock() -- no contention window, no donation to observe, and
+// not nearly enough continuous running time for `low` or `starved`
+// to actually get demoted. Driving everything off ticks fixes that
+// regardless of how fast the underlying machine is.
+//
 // Usage (inside the xv6 shell):
 //   $ don_super
 //   $ schedstat_dump sched.csv
@@ -35,7 +46,21 @@
 
 #define NHOGS     2
 #define NIO       2
-#define DURATION  120   // ticks; clockintr fires ~10x/sec, so ~12s total
+#define DURATION  300   // ticks; clockintr fires ~10x/sec, so ~30s total.
+                         // Bumped way up from 120 so aging (if
+                         // implemented) has real runway to promote
+                         // `starved` before the run ends.
+
+// --- Donation-pair timeline, all in ticks from each thread's own start ---
+#define LOW_PRELOCK_TICKS    40   // low spins this long BEFORE grabbing
+                                   // the mutex -- long enough to force
+                                   // several MLFQ demotions first.
+#define LOW_HOLD_TICKS       60   // low then holds the mutex this long.
+#define HIGH_PRELOCK_TICKS   50   // high spins this long before trying
+                                   // to lock -- guaranteed to land
+                                   // inside low's hold window
+                                   // (LOW_PRELOCK_TICKS, LOW_PRELOCK_TICKS
+                                   // + LOW_HOLD_TICKS) = (40, 100).
 
 int mid;   // donation-target mutex (low holds it, high blocks on it)
 int pmid;  // print-serializing mutex — output clarity only
@@ -60,6 +85,22 @@ burn(long n)
   for (volatile long i = 0; i < n; i++) {}
 }
 
+// NOTE: this is the actual fix. Busy-spin in small chunks, checking
+// uptime() between chunks, until `ticks` scheduler ticks have
+// genuinely elapsed -- independent of host CPU speed. Every phase
+// below is now expressed in ticks (uptime()), never in raw iteration
+// counts, so the whole demo's timing is reproducible on any machine.
+void
+burn_ticks(int ticks)
+{
+  int start = uptime();
+  while (uptime() - start < ticks)
+    burn(50000);  // small enough to poll uptime() often, still keeps
+                   // the CPU continuously busy (never voluntarily
+                   // yields) so MLFQ sees it as CPU-bound the whole
+                   // time.
+}
+
 // Never blocks voluntarily -> should demote to and settle at the
 // bottom MLFQ queue.
 void
@@ -80,13 +121,11 @@ void
 io_bound(void *arg)
 {
   int start = uptime();
-  int wakes = 0;
 
   safe_print("[io] starting, works briefly then sleeps, repeatedly\n");
   while (uptime() - start < DURATION) {
     burn(20000);
     pause(2);
-    wakes++;
   }
   safe_print("[io] done\n");
   thread_exit(0);
@@ -97,6 +136,13 @@ io_bound(void *arg)
 // thread would starve; with aging it should eventually get force-
 // promoted back to the top queue after AGING_THRESHOLD ticks of
 // waiting -- that's the jump-back-up you want to see in the chart.
+//
+// Runs for the full DURATION (was previously bounded by the same
+// DURATION but DURATION itself was too short at 120 ticks for most
+// aging thresholds to ever fire). Never sleeps, so it behaves like a
+// hog to the scheduler and should get demoted right alongside them --
+// the interesting thing to check is whether it EVER climbs back up
+// before the run ends.
 void
 starved_worker(void *arg)
 {
@@ -104,7 +150,7 @@ starved_worker(void *arg)
 
   safe_print("[starved] starting, mostly just waiting behind the hogs\n");
   while (uptime() - start < DURATION)
-    burn(500000);
+    burn_ticks(1);
   safe_print("[starved] done\n");
   thread_exit(0);
 }
@@ -113,11 +159,11 @@ void
 low_priority_worker(void *arg)
 {
   safe_print("[low] burning CPU to force demotion...\n");
-  burn(50000000);
+  burn_ticks(LOW_PRELOCK_TICKS);
   safe_print("[low] now locking mutex (should be demoted by now)\n");
   mutex_lock(mid);
   safe_print("[low] got the mutex, holding it for a LONG time...\n");
-  burn(200000000);
+  burn_ticks(LOW_HOLD_TICKS);
   safe_print("[low] releasing the mutex\n");
   mutex_unlock(mid);
   thread_exit(0);
@@ -126,7 +172,11 @@ low_priority_worker(void *arg)
 void
 high_priority_worker(void *arg)
 {
-  burn(60000000);
+  // Arrives at tick HIGH_PRELOCK_TICKS (50), which is safely inside
+  // low's hold window of (LOW_PRELOCK_TICKS, LOW_PRELOCK_TICKS +
+  // LOW_HOLD_TICKS) = (40, 100) -- guaranteed contention, regardless
+  // of host speed.
+  burn_ticks(HIGH_PRELOCK_TICKS);
   safe_print("[high] trying to lock (should block on low's held mutex)...\n");
   mutex_lock(mid);
   safe_print("[high] got the mutex!\n");

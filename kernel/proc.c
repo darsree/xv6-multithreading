@@ -22,6 +22,37 @@ extern struct spinlock thread_lock;
 extern void forkret(void);
 void freeproc(struct proc *p);
 
+void
+free_shared_pagetable(struct proc *p, pagetable_t oldpagetable, uint64 oldsz)
+{
+  if (oldpagetable == 0)
+    return;
+
+  if (p->pgrefcnt) {
+    uint64 shared_hi = p->is_thread ? p->ustack_base : oldsz;
+
+    if (p->is_thread && oldsz > shared_hi)
+      uvmunmap(oldpagetable, shared_hi,
+               (PGROUNDUP(oldsz) - shared_hi) / PGSIZE, 1);
+
+    acquire(&thread_lock);
+    int refs = --(*p->pgrefcnt);
+    release(&thread_lock);
+
+    if (shared_hi > 0)
+      uvmunmap(oldpagetable, 0, PGROUNDUP(shared_hi) / PGSIZE,
+               refs == 0 ? 1 : 0);
+
+    if (refs == 0)
+      kfree((void *)p->pgrefcnt);
+
+    uvmunmap(oldpagetable, TRAMPOLINE, 1, 0);
+    uvmunmap(oldpagetable, TRAPFRAME, 1, 0);
+    freewalk(oldpagetable);
+  } else {
+    proc_freepagetable(oldpagetable, oldsz);
+  }
+}
 extern char trampoline[]; // trampoline.S
 
 // helps ensure that wakeups of wait()ing
