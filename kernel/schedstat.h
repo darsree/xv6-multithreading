@@ -5,7 +5,7 @@
 #ifndef SCHEDSTAT_H
 #define SCHEDSTAT_H
 
-#define SCHEDSTAT_RINGSIZE 1024
+#define SCHEDSTAT_RINGSIZE 8192
 
 struct schedstat_rec {
   uint  tick;

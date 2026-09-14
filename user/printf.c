@@ -6,14 +6,51 @@
 
 static char digits[] = "0123456789ABCDEF";
 
+// Root-cause fix for console interleaving: stock xv6's putc() used to
+// call write(fd, &c, 1) -- one syscall PER CHARACTER. That gave any
+// concurrent writer on another CPU (kernel printk(), which does hold
+// a lock for its whole line) endless chances to interleave into the
+// middle of a single printf()/fprintf() call, byte by byte. This is
+// what was splicing kernel "mlfq:"/"donate:" debug lines into the
+// middle of schedstat_dump's CSV rows.
+//
+// Buffering each vprintf() call and flushing it with ONE write() per
+// call (or per PBUFSZ-sized chunk, for output longer than that) closes
+// almost all of that window: the whole line leaves in a single syscall
+// instead of one per digit. It doesn't add a new lock -- printk()
+// still isn't synchronized with consolewrite() -- but it shrinks the
+// number of syscall boundaries a foreign writer could land in from
+// "one per character" to "at most one per print call", which is why
+// this alone is enough to stop rows from being split in practice. A
+// fully airtight fix would need printk() and consolewrite() to share
+// a lock across the whole write; this is the safe, low-risk version
+// of that fix.
+#define PBUFSZ 128
+
+struct pbuf {
+  int fd;
+  char buf[PBUFSZ];
+  int len;
+};
+
 static void
-putc(int fd, char c)
+pflush(struct pbuf *pb)
 {
-  write(fd, &c, 1);
+  if (pb->len > 0)
+    write(pb->fd, pb->buf, pb->len);
+  pb->len = 0;
 }
 
 static void
-printint(int fd, long long xx, int base, int sgn)
+putc(struct pbuf *pb, char c)
+{
+  if (pb->len == PBUFSZ)
+    pflush(pb);
+  pb->buf[pb->len++] = c;
+}
+
+static void
+printint(struct pbuf *pb, long long xx, int base, int sgn)
 {
   char buf[20];
   int i, neg;
@@ -35,17 +72,17 @@ printint(int fd, long long xx, int base, int sgn)
     buf[i++] = '-';
 
   while (--i >= 0)
-    putc(fd, buf[i]);
+    putc(pb, buf[i]);
 }
 
 static void
-printptr(int fd, uint64 x)
+printptr(struct pbuf *pb, uint64 x)
 {
   int i;
-  putc(fd, '0');
-  putc(fd, 'x');
+  putc(pb, '0');
+  putc(pb, 'x');
   for (i = 0; i < (sizeof(uint64) * 2); i++, x <<= 4)
-    putc(fd, digits[x >> (sizeof(uint64) * 8 - 4)]);
+    putc(pb, digits[x >> (sizeof(uint64) * 8 - 4)]);
 }
 
 // Print to the given fd. Only understands %d, %x, %p, %c, %s.
@@ -54,6 +91,10 @@ vprintf(int fd, const char *fmt, va_list ap)
 {
   char *s;
   int c0, c1, c2, i, state;
+  struct pbuf pb;
+
+  pb.fd = fd;
+  pb.len = 0;
 
   state = 0;
   for (i = 0; fmt[i]; i++) {
@@ -62,7 +103,7 @@ vprintf(int fd, const char *fmt, va_list ap)
       if (c0 == '%') {
         state = '%';
       } else {
-        putc(fd, c0);
+        putc(&pb, c0);
       }
     } else if (state == '%') {
       c1 = c2 = 0;
@@ -71,49 +112,51 @@ vprintf(int fd, const char *fmt, va_list ap)
       if (c1)
         c2 = fmt[i + 2] & 0xff;
       if (c0 == 'd') {
-        printint(fd, va_arg(ap, int), 10, 1);
+        printint(&pb, va_arg(ap, int), 10, 1);
       } else if (c0 == 'l' && c1 == 'd') {
-        printint(fd, va_arg(ap, uint64), 10, 1);
+        printint(&pb, va_arg(ap, uint64), 10, 1);
         i += 1;
       } else if (c0 == 'l' && c1 == 'l' && c2 == 'd') {
-        printint(fd, va_arg(ap, uint64), 10, 1);
+        printint(&pb, va_arg(ap, uint64), 10, 1);
         i += 2;
       } else if (c0 == 'u') {
-        printint(fd, va_arg(ap, uint32), 10, 0);
+        printint(&pb, va_arg(ap, uint32), 10, 0);
       } else if (c0 == 'l' && c1 == 'u') {
-        printint(fd, va_arg(ap, uint64), 10, 0);
+        printint(&pb, va_arg(ap, uint64), 10, 0);
         i += 1;
       } else if (c0 == 'l' && c1 == 'l' && c2 == 'u') {
-        printint(fd, va_arg(ap, uint64), 10, 0);
+        printint(&pb, va_arg(ap, uint64), 10, 0);
         i += 2;
       } else if (c0 == 'x') {
-        printint(fd, va_arg(ap, uint32), 16, 0);
+        printint(&pb, va_arg(ap, uint32), 16, 0);
       } else if (c0 == 'l' && c1 == 'x') {
-        printint(fd, va_arg(ap, uint64), 16, 0);
+        printint(&pb, va_arg(ap, uint64), 16, 0);
         i += 1;
       } else if (c0 == 'l' && c1 == 'l' && c2 == 'x') {
-        printint(fd, va_arg(ap, uint64), 16, 0);
+        printint(&pb, va_arg(ap, uint64), 16, 0);
         i += 2;
       } else if (c0 == 'p') {
-        printptr(fd, va_arg(ap, uint64));
+        printptr(&pb, va_arg(ap, uint64));
       } else if (c0 == 'c') {
-        putc(fd, va_arg(ap, uint32));
+        putc(&pb, va_arg(ap, uint32));
       } else if (c0 == 's') {
         if ((s = va_arg(ap, char *)) == 0)
           s = "(null)";
         for (; *s; s++)
-          putc(fd, *s);
+          putc(&pb, *s);
       } else if (c0 == '%') {
-        putc(fd, '%');
+        putc(&pb, '%');
       } else {
         // Unknown % sequence.  Print it to draw attention.
-        putc(fd, '%');
-        putc(fd, c0);
+        putc(&pb, '%');
+        putc(&pb, c0);
       }
 
       state = 0;
     }
   }
+
+  pflush(&pb);
 }
 
 void

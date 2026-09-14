@@ -275,15 +275,40 @@ def plot_view(ax, df, cpu_col, value_col, title, cmap_name, events=None):
     if events:
         ylim = ax.get_ylim()
         yspan = ylim[1] - ylim[0]
-        # Stagger label heights in a repeating pattern so events that
-        # land close together in tick don't overlap into illegible
-        # stacked text -- each successive event (in tick order) goes
-        # one step higher, cycling through a few offset levels.
-        n_levels = 4
-        for idx, (tick, label, kind) in enumerate(events):
+        xlim_cur = ax.get_xlim()
+        xspan = max(xlim_cur[1] - xlim_cur[0], 1)
+        step = 0.55 * yspan
+
+        # Greedy collision avoidance: events land in tick order, and
+        # each one takes the lowest level whose most recent occupant
+        # is far enough away (in x) not to visually collide once
+        # rotated 90deg. A blind "idx % n_levels" cycle (the old
+        # approach) can still land two labels on adjacent levels only
+        # 0.55*yspan apart even when their ticks are ~1 apart -- for
+        # long rotated strings that's not enough clearance and they
+        # print on top of each other (exactly what BOOST/RESTORE
+        # pairs do, since they're deliberately never merged together
+        # even when close in tick -- see cluster_events()).
+        min_gap = xspan * 0.02
+        level_last_tick = []  # level_last_tick[lvl] = tick of last label placed there
+        placements = []
+        for tick, label, kind in events:
+            lvl = None
+            for existing_lvl, last_tick in enumerate(level_last_tick):
+                if tick - last_tick >= min_gap:
+                    lvl = existing_lvl
+                    break
+            if lvl is None:
+                lvl = len(level_last_tick)
+                level_last_tick.append(tick)
+            else:
+                level_last_tick[lvl] = tick
+            placements.append((tick, label, kind, lvl))
+
+        for tick, label, kind, lvl in placements:
             color = EVENT_COLOR.get(kind, "black")
             ax.axvline(tick, color=color, linestyle="--", linewidth=1, alpha=0.8)
-            y = ylim[1] + (idx % n_levels) * 0.55 * yspan
+            y = ylim[1] + lvl * step
             ax.text(tick, y, label, rotation=90, va="bottom", ha="center",
                     fontsize=7, color=color)
 
