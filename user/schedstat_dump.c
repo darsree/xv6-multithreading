@@ -40,6 +40,26 @@ main(int argc, char *argv[])
     exit(1);
   }
 
+  // Heuristic: getschedstat() caps its return at SCHEDSTAT_RINGSIZE,
+  // so hitting that exact number is the signature of a ring that
+  // filled up and wrapped -- meaning the run generated more events
+  // than the buffer holds, and the OLDEST ones (possibly including
+  // unpaired start/stop halves right at the wrap boundary) were
+  // overwritten before you got here. Not a guarantee (a run could
+  // coincidentally produce exactly RINGSIZE records), but a strong
+  // enough signal to flag rather than silently hand back a chart
+  // with missing history.
+  if (n == SCHEDSTAT_RINGSIZE) {
+    printf("schedstat_dump: WARNING -- returned exactly %d records "
+           "(the ring buffer's full capacity). This run likely "
+           "generated more events than that and the earliest ones "
+           "were overwritten; if the chart looks like it's missing "
+           "the start of the test, or shows orphaned start/stop "
+           "bars, this is why. Bump SCHEDSTAT_RINGSIZE in "
+           "kernel/schedstat.h and user/schedstat.h and rebuild.\n",
+           SCHEDSTAT_RINGSIZE);
+  }
+
   int fd = 1;           // default: stdout (console)
   int opened_file = 0;
 

@@ -12,6 +12,6 @@ struct schedstat_rec {
   int   priority;
 };
 
-#define SCHEDSTAT_RINGSIZE 1024
+#define SCHEDSTAT_RINGSIZE 8192
 
 #endif
