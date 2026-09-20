@@ -1,0 +1,799 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Thread Analyser — xv6 scheduler trace replay</title>
+<style>
+  :root {
+    --page: #FAFBFD;
+    --panel: #FFFFFF;
+    --ink: #1B2436;
+    --ink-2: #5B6576;
+    --ink-3: #8A93A4;
+    --line: #EAEDF3;
+    --line-2: #D9DEE8;
+    --lane-bg: #F1F3F8;
+    --accent: #6D28D9;
+
+    --running: #16A34A;
+    --runnable: #2563EB;
+    --sleeping: #D97706;
+    --zombie: #DC2626;
+
+    --font: "Inter", "Segoe UI", system-ui, -apple-system, Roboto, "Helvetica Neue", Arial, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --shadow: 0 1px 2px rgba(20, 30, 50, .05);
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; overflow-x: hidden; background: var(--page); color: var(--ink); font-family: var(--font); font-size: 14px; line-height: 1.45; }
+  body { font-variant-numeric: tabular-nums; }
+  .wrap { max-width: 1320px; margin: 0 auto; padding: 0 24px 48px; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* header */
+  header { display: flex; align-items: center; gap: 12px; padding: 20px 0 14px; }
+  header h1 { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -0.2px; }
+  header p { margin: 0; color: var(--ink-3); font-size: 13px; }
+
+  /* buttons */
+  .btn {
+    font: inherit; font-weight: 600; font-size: 13px; color: var(--ink);
+    background: var(--panel); border: 1px solid var(--line-2); border-radius: 8px;
+    padding: 8px 14px; cursor: pointer; line-height: 1.2;
+  }
+  .btn:hover { background: var(--lane-bg); }
+  .btn.solid { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.solid:hover { background: #5B21B6; border-color: #5B21B6; }
+
+  /* load bar */
+  .loadbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; box-shadow: var(--shadow); }
+  .loadbar .meta { flex: 1; min-width: 220px; color: var(--ink-2); font-size: 13px; display: flex; flex-wrap: wrap; gap: 2px 16px; }
+  .loadbar .meta b { color: var(--ink); font-weight: 600; }
+  .loadbar .warn { color: #B45309; font-size: 12px; font-weight: 500; }
+  .loadbar .err { color: var(--zombie); font-weight: 600; }
+
+  /* empty state */
+  .hero { margin-top: 14px; background: var(--panel); border: 1px dashed var(--line-2); border-radius: 12px; padding: 52px 24px; text-align: center; cursor: pointer; }
+  .hero:hover, .hero.drag { border-color: var(--accent); background: #FAF7FF; }
+  .hero h2 { margin: 0 0 6px; font-size: 19px; font-weight: 700; }
+  .hero p { margin: 0 auto; max-width: 540px; color: var(--ink-2); }
+  .hero code { font-family: var(--mono); font-size: 12px; background: var(--lane-bg); padding: 2px 6px; border-radius: 4px; }
+  .bars { display: flex; flex-direction: column; gap: 5px; width: 200px; margin: 0 auto 22px; }
+  .bars i { display: block; height: 9px; border-radius: 5px; }
+
+  /* transport */
+  .transport {
+    position: sticky; top: 0; z-index: 30; margin: 12px -24px 0; padding: 10px 24px;
+    background: rgba(250,251,253,.94); backdrop-filter: blur(6px); border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  }
+  .tbtn { width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--line-2); background: #fff; color: var(--ink); border-radius: 8px; cursor: pointer; padding: 0; }
+  .tbtn:hover:not(:disabled) { background: var(--lane-bg); }
+  .tbtn svg { width: 14px; height: 14px; fill: currentColor; }
+  .tbtn.play { width: 92px; gap: 7px; background: var(--accent); border-color: var(--accent); color: #fff; font: inherit; font-weight: 600; font-size: 13px; }
+  .tbtn.play:hover { background: #5B21B6; border-color: #5B21B6; }
+  .scrub { flex: 1; min-width: 200px; accent-color: var(--accent); height: 4px; cursor: pointer; }
+  .speed { display: inline-flex; border: 1px solid var(--line-2); border-radius: 8px; overflow: hidden; background: #fff; }
+  .speed button { font: inherit; font-weight: 600; font-size: 13px; padding: 7px 13px; border: 0; background: transparent; color: var(--ink-2); cursor: pointer; }
+  .speed button:hover { background: var(--lane-bg); }
+  .speed button[aria-checked="true"] { background: var(--accent); color: #fff; }
+  .skip { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 500; color: var(--ink-2); cursor: pointer; user-select: none; }
+  .skip input { width: 15px; height: 15px; accent-color: var(--accent); }
+  .readout { min-width: 120px; text-align: right; }
+  .readout .big { font-size: 22px; font-weight: 700; line-height: 1; }
+  .readout .small { font-size: 12px; color: var(--ink-3); }
+
+  /* KPI cards: tinted, coloured number */
+  .kpis { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; margin-top: 14px; }
+  .kpi { background: var(--t, #fff); border: 1px solid var(--tb, var(--line)); border-radius: 12px; padding: 12px 14px; min-height: 82px; display: flex; flex-direction: column; justify-content: space-between; }
+  .kpi .n { font-size: 30px; font-weight: 700; line-height: 1; letter-spacing: -0.5px; color: var(--c, var(--ink)); }
+  .kpi .l { font-size: 13px; font-weight: 600; color: var(--ink-2); margin-top: 8px; }
+  .kpi .l small { display: block; font-weight: 400; color: var(--ink-3); font-size: 12px; margin-top: 1px; }
+  .kpi.run { --c: #15803D; --t: #EDF8F1; --tb: #D3EEDD; }
+  .kpi.rdy { --c: #1D4ED8; --t: #EEF3FE; --tb: #D6E2FC; }
+  .kpi.slp { --c: #B45309; --t: #FEF5E6; --tb: #F8E4BE; }
+  .kpi.zmb { --c: #B91C1C; --t: #FDEEEE; --tb: #F8D3D3; }
+
+  /* panels */
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; margin-top: 14px; min-width: 0; box-shadow: var(--shadow); overflow: hidden; }
+  .panel > h2 { margin: 0; padding: 12px 16px; font-size: 14px; font-weight: 600; border-bottom: 1px solid var(--line); display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+  .panel > h2 small { font-size: 12px; font-weight: 400; color: var(--ink-3); }
+
+  /* CPU cards */
+  .cpus { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; margin-top: 14px; }
+  .cpu { background: var(--panel); border: 1px solid var(--line); border-top: 3px solid var(--line-2); border-radius: 12px; padding: 11px 14px 12px; min-height: 108px; box-shadow: var(--shadow); }
+  .cpu.busy { border-top-color: var(--running); }
+  .cpu .top { display: flex; justify-content: space-between; align-items: baseline; }
+  .cpu .name { font-weight: 600; font-size: 13px; }
+  .cpu .status { font-size: 12px; font-weight: 500; color: var(--ink-3); }
+  .cpu.busy .status { color: var(--running); }
+  .cpu .now { display: flex; align-items: center; gap: 9px; margin: 8px 0 6px; min-height: 30px; }
+  .cpu .now .chip { width: 10px; height: 30px; border-radius: 3px; flex: none; }
+  .cpu .now .t { font-size: 24px; font-weight: 700; line-height: 1; }
+  .cpu .now .idle { font-size: 18px; font-weight: 600; color: var(--ink-3); }
+  .tag { display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 6px; background: var(--lane-bg); color: var(--ink-2); }
+  .cpu .foot { font-size: 12px; color: var(--ink-2); display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: center; }
+  .cpu .foot .mix { display: inline-flex; align-items: center; font-weight: 600; font-size: 11px; color: #fff; padding: 1px 6px; border-radius: 6px; }
+
+  /* main grid */
+  .cols { display: grid; grid-template-columns: minmax(0, 1.9fr) minmax(300px, 1fr); gap: 14px; align-items: start; }
+
+  /* thread table */
+  .tscroll { max-height: 520px; overflow: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  thead th { position: sticky; top: 0; background: #fff; text-align: left; font-size: 12px; font-weight: 500; color: var(--ink-3); padding: 8px 12px; border-bottom: 1px solid var(--line); z-index: 1; white-space: nowrap; }
+  tbody td { padding: 7px 12px; border-bottom: 1px solid var(--line); vertical-align: middle; white-space: nowrap; }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover { background: #F9FAFC; }
+  tbody tr.gstart td { border-top: 1px solid var(--line-2); }
+  tbody tr.gstart:first-child td { border-top: 0; }
+  tbody tr.unborn { opacity: .45; }
+  tbody tr.focus { background: #F7F2FF; box-shadow: inset 3px 0 0 var(--accent); }
+  tbody tr.changed td:first-child { box-shadow: inset 3px 0 0 #FACC15; }
+  tbody tr.focus.changed td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+  .tname { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; font-size: 13.5px; }
+  .tname i { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+  .kind { font-weight: 400; font-size: 12px; color: var(--ink-3); margin-left: 6px; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; min-width: 88px; padding: 3px 10px; border-radius: 999px; font-weight: 600; font-size: 12px; color: var(--c); background: var(--t); }
+  .pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--d); flex: none; }
+  .pill.none { background: var(--lane-bg); color: var(--ink-3); }
+  .pill.none::before { display: none; }
+  .then { font-size: 12px; color: var(--ink-3); margin-left: 6px; }
+  .q { display: inline-block; font-weight: 600; font-size: 12px; padding: 2px 8px; border-radius: 6px; background: var(--lane-bg); color: var(--ink-2); }
+  .q0 { background: #E4E8F1; color: #1B2436; }
+  .dash { color: var(--ink-3); }
+  .runs { display: flex; align-items: center; gap: 8px; min-width: 130px; }
+  .runs .bar { flex: 1; height: 6px; background: var(--lane-bg); border-radius: 3px; overflow: hidden; min-width: 50px; }
+  .runs .bar i { display: block; height: 100%; }
+  .runs b { min-width: 30px; text-align: right; font-weight: 600; }
+  .runs .plus { font-size: 11px; font-weight: 600; color: var(--running); min-width: 26px; }
+
+  /* event log */
+  .log { max-height: 520px; overflow: auto; }
+  .ev { display: flex; align-items: center; gap: 10px; padding: 6px 16px; border-bottom: 1px solid var(--line); font-size: 13px; }
+  .ev:last-child { border-bottom: 0; }
+  .ev .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .ev .ev-cpu { width: 46px; font-weight: 500; color: var(--ink-3); font-size: 12px; flex: none; }
+  .ev .txt b { font-weight: 600; }
+  .ev .txt span { color: var(--ink-2); }
+  .empty { padding: 24px 16px; color: var(--ink-3); font-size: 13px; }
+  .clearfocus { font-size: 12px; font-weight: 600; color: var(--accent); background: none; border: 0; cursor: pointer; padding: 0; }
+
+  /* timeline */
+  .tl-wrap { position: relative; padding: 4px 16px 10px; cursor: crosshair; user-select: none; touch-action: pan-y; }
+  .tl-wrap canvas { display: block; width: 100%; }
+  .tl-sub { font-size: 12px; font-weight: 500; color: var(--ink-3); margin: 10px 0 0; }
+  #ph { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--accent); pointer-events: none; z-index: 3; }
+  #ph::before { content: ""; position: absolute; top: 0; left: -5px; border: 6px solid transparent; border-top-color: var(--accent); border-bottom: 0; }
+  #future { position: absolute; top: 0; bottom: 0; background: rgba(255,255,255,.68); pointer-events: none; z-index: 2; }
+  #tip { position: absolute; z-index: 5; pointer-events: none; background: var(--ink); color: #fff; font-size: 12px; font-weight: 500; padding: 6px 9px; border-radius: 6px; white-space: nowrap; transform: translate(12px, -110%); }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; padding: 0 16px 14px; font-size: 12px; color: var(--ink-2); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
+
+  @media (max-width: 1000px) {
+    .cols { grid-template-columns: minmax(0, 1fr); }
+    .kpis { grid-template-columns: repeat(3, 1fr); }
+  }
+  @media (max-width: 560px) {
+    .wrap { padding: 0 14px 40px; }
+    .transport { margin: 12px -14px 0; padding: 10px 14px; }
+    .kpis { grid-template-columns: repeat(2, 1fr); }
+    .readout { text-align: left; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <svg class="logo" width="44" height="44" viewBox="0 0 44 44" aria-hidden="true">
+      <rect width="44" height="44" rx="9" fill="#1B2436"/>
+      <rect x="8" y="9"  width="20" height="6" rx="1.5" fill="#16A34A"/>
+      <rect x="18" y="19" width="18" height="6" rx="1.5" fill="#2563EB"/>
+      <rect x="8" y="29" width="12" height="6" rx="1.5" fill="#D97706"/>
+      <rect x="24" y="29" width="12" height="6" rx="1.5" fill="#DC2626"/>
+    </svg>
+    <div>
+      <h1>Thread Analyser</h1>
+      <p>Replay an xv6 schedstat trace one tick at a time</p>
+    </div>
+  </header>
+
+  <div class="loadbar">
+    <button class="btn solid" id="loadBtn">Load CSV</button>
+    <input type="file" id="fileInput" accept=".csv,.txt,.log" hidden>
+    <select class="btn" id="runSel" aria-label="Choose run" hidden></select>
+    <div class="meta" id="meta"><span>No trace loaded</span></div>
+  </div>
+
+  <section class="hero" id="hero">
+    <div class="bars" aria-hidden="true">
+      <i style="width:70%;background:var(--running)"></i>
+      <i style="width:55%;margin-left:30%;background:var(--runnable)"></i>
+      <i style="width:40%;margin-left:12%;background:var(--sleeping)"></i>
+      <i style="width:25%;margin-left:65%;background:var(--zombie)"></i>
+    </div>
+    <h2>Drop a schedstat CSV here</h2>
+    <p>The file is the output of <code>schedstat_dump</code>: seven columns, <code>tick,tgid,tid,is_thread,state,cpu_id,priority</code>. A header row is optional and stray console lines are skipped. Click here or drop the file to open it.</p>
+  </section>
+
+  <div id="app" hidden>
+
+    <div class="transport" role="group" aria-label="Playback controls">
+      <button class="tbtn" id="bStart" title="Back to first tick (Home)" aria-label="Back to first tick"><svg viewBox="0 0 16 16"><path d="M3 2h2v12H3zM14 2v12L6 8z"/></svg></button>
+      <button class="tbtn" id="bPrev" title="Previous tick (←)" aria-label="Previous tick"><svg viewBox="0 0 16 16"><path d="M12 2v12L4 8z"/></svg></button>
+      <button class="tbtn play" id="bPlay" title="Play / pause (Space)"><svg viewBox="0 0 16 16" id="playIcon"><path d="M4 2v12l10-6z"/></svg><span id="playTxt">Play</span></button>
+      <button class="tbtn" id="bNext" title="Next tick (→)" aria-label="Next tick"><svg viewBox="0 0 16 16"><path d="M4 2v12l8-6z"/></svg></button>
+      <input class="scrub" type="range" id="scrub" min="0" max="0" value="0" aria-label="Tick position">
+      <div class="speed" role="radiogroup" aria-label="Playback speed">
+        <button role="radio" aria-checked="true" data-speed="1">1x</button>
+        <button role="radio" aria-checked="false" data-speed="2">2x</button>
+        <button role="radio" aria-checked="false" data-speed="3">3x</button>
+      </div>
+      <label class="skip"><input type="checkbox" id="skipIdle" checked> Skip idle ticks</label>
+      <div class="readout"><div class="big" id="rdTick">0</div><div class="small" id="rdSub"></div></div>
+    </div>
+
+    <div class="kpis">
+      <div class="kpi"><div class="n" id="kTick">0</div><div class="l">Current tick</div></div>
+      <div class="kpi run"><div class="n" id="kRun">0</div><div class="l">Running <small>on a CPU this tick</small></div></div>
+      <div class="kpi rdy"><div class="n" id="kRdy">0</div><div class="l">Runnable</div></div>
+      <div class="kpi slp"><div class="n" id="kSlp">0</div><div class="l">Sleeping</div></div>
+      <div class="kpi zmb"><div class="n" id="kZmb">0</div><div class="l">Zombie</div></div>
+      <div class="kpi"><div class="n" id="kSw">0</div><div class="l">Context switches <small id="kSwSub"></small></div></div>
+    </div>
+
+    <div class="cpus" id="cpus"></div>
+
+    <div class="cols">
+      <section class="panel">
+        <h2>Threads <small id="thCount"></small></h2>
+        <div class="tscroll">
+          <table>
+            <thead><tr>
+              <th>Thread</th><th>Process</th><th>State</th><th>CPU</th>
+              <th title="The priority column is the MLFQ queue level. Q0 is the highest priority.">Queue</th>
+              <th title="Times this thread was dispatched onto a CPU so far">Dispatches</th>
+            </tr></thead>
+            <tbody id="tbody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2><span id="logTitle">Events this tick</span> <small id="logSub"></small></h2>
+        <div class="log" id="log"></div>
+      </section>
+    </div>
+
+    <section class="panel">
+      <h2>Timeline <small>Click or drag to jump to a tick. Click a thread label to focus it.</small></h2>
+      <div class="tl-wrap" id="tlWrap">
+        <div class="tl-sub" style="margin-top:6px">Thread states</div>
+        <canvas id="cvThreads"></canvas>
+        <div class="tl-sub">CPU occupancy</div>
+        <canvas id="cvCpus"></canvas>
+        <div id="future"></div>
+        <div id="ph"></div>
+        <div id="tip" hidden></div>
+      </div>
+      <div class="legend" id="legend"></div>
+    </section>
+
+  </div>
+</div>
+
+<script>
+/* =====================================================================
+   Thread Analyser — replays a schedstat CSV tick by tick.
+   CSV columns: tick,tgid,tid,is_thread,state,cpu_id,priority
+   state 4 = dispatched onto a CPU; other states = switched out into it.
+   ===================================================================== */
+const BASE_TPS = 2;               // ticks per second at 1x
+const STATES = {   // color = timeline lane, dark = pill text, tint = pill background
+  0: { name: "unused",   color: "#94A3B8", dark: "#475569", tint: "#F1F3F8" },
+  1: { name: "used",     color: "#0891B2", dark: "#0E7490", tint: "#E6F6FA" },
+  2: { name: "sleeping", color: "#D97706", dark: "#B45309", tint: "#FEF3DF" },
+  3: { name: "runnable", color: "#2563EB", dark: "#1D4ED8", tint: "#E8EFFE" },
+  4: { name: "running",  color: "#16A34A", dark: "#15803D", tint: "#E5F6EB" },
+  5: { name: "zombie",   color: "#DC2626", dark: "#B91C1C", tint: "#FCE9E9" }
+};
+const THREAD_PAL = ["#E11D48","#7C3AED","#0891B2","#EA580C","#4D7C0F","#DB2777","#1D4ED8","#0D9488",
+                    "#A16207","#9333EA","#0369A1","#BE123C","#15803D","#C2410C","#6D28D9","#0E7490"];
+const threadColor = i => i < THREAD_PAL.length ? THREAD_PAL[i] : `hsl(${(i * 137.5) % 360} 70% ${i % 2 ? 40 : 50}%)`;
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+/* ---------------------------- parsing ---------------------------- */
+const ROW_RE = /^-?\d+(\s*,\s*-?\d+){6}$/;
+const CANON = ["tick", "tgid", "tid", "is_thread", "state", "cpu_id", "priority"];
+
+function parseText(text) {
+  let colOrder = CANON.map((_, i) => i);
+  const rows = []; let skipped = 0;
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line === "END_SCHEDSTAT") continue;
+    if (/^tick\s*,/i.test(line)) {
+      const names = line.split(",").map(s => s.trim().toLowerCase());
+      if (CANON.every(c => names.includes(c))) colOrder = CANON.map(c => names.indexOf(c));
+      continue;
+    }
+    if (ROW_RE.test(line)) {
+      const v = line.split(",").map(s => Number(s.trim()));
+      rows.push(colOrder.map(i => v[i]));
+    } else skipped++;
+  }
+  return splitRuns(rows, skipped);
+}
+
+/* Real console captures contain two kinds of damage:
+   - a single row with a garbled tick (e.g. 41 instead of 141) -> dropped
+   - the tick counter restarting (a second test run appended)   -> split into runs */
+function splitRuns(rows, skipped) {
+  const runs = []; let cur = [], maxT = -Infinity, glitches = 0;
+  const TOL = 2, JUMP = 1000;
+  for (let i = 0; i < rows.length; i++) {
+    const t = rows[i][0];
+    if (!cur.length) { cur.push(rows[i]); maxT = t; continue; }
+    const low = t < maxT - TOL, high = t > maxT + JUMP;
+    if (!low && !high) { cur.push(rows[i]); if (t > maxT) maxT = t; continue; }
+    const ok = r => r && r[0] >= maxT - TOL && r[0] <= maxT + JUMP;
+    const n1 = rows[i + 1], n2 = rows[i + 2];
+    if (ok(n1) || (ok(n2) && n1 && (n1[0] < maxT - TOL || n1[0] > maxT + JUMP))) { glitches++; continue; }   // isolated bad row(s)
+    if (!n1) { glitches++; continue; }
+    if (low && n1[0] < maxT - TOL && (!n2 || n2[0] < maxT - TOL)) {                                         // sustained reset
+      runs.push(cur); cur = [rows[i]]; maxT = t; continue;
+    }
+    if (high) { cur.push(rows[i]); maxT = t; continue; }                                                     // real gap
+    glitches++;
+  }
+  if (cur.length) runs.push(cur);
+  return { runs, skipped, glitches };
+}
+
+/* ---------------------------- run model ---------------------------- */
+function buildRun(rows) {
+  const recs = rows.map(r => ({ tick: r[0], tgid: r[1], tid: r[2], isThread: r[3], state: r[4], cpu: r[5], prio: r[6] }));
+  recs.sort((a, b) => a.tick - b.tick);                       // stable, keeps file order inside a tick
+  const minT = recs[0].tick, maxT = recs[recs.length - 1].tick, span = maxT - minT + 1;
+  if (span > 400000) throw new Error("Tick range is too large to replay (" + span + " ticks).");
+
+  const tmap = new Map();
+  for (const r of recs) {
+    const k = r.tgid + ":" + r.tid;
+    if (!tmap.has(k)) tmap.set(k, { tgid: r.tgid, tid: r.tid, isThread: r.isThread, first: r.tick });
+  }
+  const threads = [...tmap.values()].sort((a, b) => a.tgid - b.tgid || a.tid - b.tid);
+  threads.forEach((t, i) => { t.idx = i; t.color = threadColor(i); t.gstart = i === 0 || threads[i - 1].tgid !== t.tgid; });
+  const cpus = [...new Set(recs.map(r => r.cpu))].sort((a, b) => a - b);
+  const cpuIdx = new Map(cpus.map((c, i) => [c, i]));
+  const nT = threads.length, nC = cpus.length;
+
+  const byTick = Array.from({ length: span }, () => []);
+  for (const r of recs) {
+    r.ti = tmap.get(r.tgid + ":" + r.tid).idx; r.ci = cpuIdx.get(r.cpu);
+    byTick[r.tick - minT].push(r);
+  }
+
+  const D = [], E = [], N = [], C = [], P = [], CUM = [], CM = [], SW = new Uint32Array(span);
+  const endSt = new Uint8Array(nT), cpuLast = new Int16Array(nT).fill(-1), prio = new Int16Array(nT).fill(-1);
+  const cum = new Uint32Array(nT), runCpu = new Int16Array(nT).fill(-1), cpuCur = new Int16Array(nC).fill(-1);
+  let totalSw = 0;
+
+  for (let o = 0; o < span; o++) {
+    const n = new Uint16Array(nT), cnt = new Uint16Array(nC * nT), seq = new Uint32Array(nC * nT);
+    let s = 0;
+    for (const e of byTick[o]) {
+      const ti = e.ti, ci = e.ci; prio[ti] = e.prio; s++;
+      if (e.state === 4) {
+        const prev = cpuCur[ci];
+        if (prev >= 0 && prev !== ti && endSt[prev] === 4) { endSt[prev] = 3; runCpu[prev] = -1; }   // implied preemption
+        if (runCpu[ti] >= 0 && runCpu[ti] !== ci && cpuCur[runCpu[ti]] === ti) cpuCur[runCpu[ti]] = -1;
+        endSt[ti] = 4; runCpu[ti] = ci; cpuCur[ci] = ti; cpuLast[ti] = e.cpu;
+        n[ti]++; cum[ti]++; totalSw++; cnt[ci * nT + ti]++; seq[ci * nT + ti] = s;
+      } else {
+        endSt[ti] = e.state; cpuLast[ti] = e.cpu;
+        if (cpuCur[ci] === ti) cpuCur[ci] = -1;
+        runCpu[ti] = -1;
+      }
+    }
+    const d = new Uint8Array(nT);
+    for (let i = 0; i < nT; i++) d[i] = n[i] > 0 ? 4 : endSt[i];
+    const cm = new Int16Array(nC);
+    for (let c = 0; c < nC; c++) {
+      let best = -1, bc = 0, bs = 0;
+      for (let i = 0; i < nT; i++) {
+        const k = cnt[c * nT + i];
+        if (k > bc || (k === bc && k > 0 && seq[c * nT + i] > bs)) { best = i; bc = k; bs = seq[c * nT + i]; }
+      }
+      cm[c] = bc > 0 ? best : cpuCur[c];
+    }
+    D.push(d); E.push(endSt.slice()); N.push(n); C.push(cpuLast.slice()); P.push(prio.slice());
+    CUM.push(cum.slice()); CM.push(cm); SW[o] = totalSw;
+  }
+
+  const next = new Int32Array(span).fill(-1), prevA = new Int32Array(span).fill(-1);
+  let nx = -1, pv = -1;
+  for (let o = span - 1; o >= 0; o--) { next[o] = nx; if (byTick[o].length) nx = o; }
+  let active = 0;
+  for (let o = 0; o < span; o++) { prevA[o] = pv; if (byTick[o].length) { pv = o; active++; } }
+  const maxCum = Math.max(1, ...cum);
+
+  return { minT, maxT, span, threads, cpus, nT, nC, byTick, D, E, N, C, P, CUM, CM, SW, next, prevA, active, maxCum, events: recs.length };
+}
+
+/* ---------------------------- app state ---------------------------- */
+let RUNS = [], RUN = null, FILE = "", cur = 0, playing = false, speed = 1, acc = 0, lastT = 0, focus = -1;
+let INFO = { skipped: 0, glitches: 0 };
+
+function loadText(text, name) {
+  const parsed = parseText(text);
+  const good = parsed.runs.filter(r => r.length >= 2);
+  if (!good.length) {
+    $("meta").innerHTML = `<span class="err">No valid rows found in ${esc(name)}. Expected 7 comma-separated integers per line: tick,tgid,tid,is_thread,state,cpu_id,priority.</span>`;
+    return;
+  }
+  FILE = name; RUNS = good; INFO = parsed;
+  const sel = $("runSel");
+  if (good.length > 1) {
+    sel.innerHTML = good.map((r, i) => {
+      const ts = r.map(x => x[0]); return `<option value="${i}">Run ${i + 1}: ticks ${Math.min(...ts)} to ${Math.max(...ts)}</option>`;
+    }).join("");
+    sel.hidden = false;
+  } else sel.hidden = true;
+  selectRun(0);
+}
+
+function selectRun(i) {
+  try { RUN = buildRun(RUNS[i]); } catch (err) { $("meta").innerHTML = `<span class="err">${esc(err.message)}</span>`; return; }
+  focus = -1; playing = false; acc = 0; cur = RUN.minT;
+  $("hero").hidden = true; $("app").hidden = false;
+  const sc = $("scrub"); sc.min = RUN.minT; sc.max = RUN.maxT; sc.value = cur;
+  const notes = [];
+  if (INFO.skipped) notes.push(`${INFO.skipped} non-data line${INFO.skipped > 1 ? "s" : ""} skipped`);
+  if (INFO.glitches) notes.push(`${INFO.glitches} row${INFO.glitches > 1 ? "s" : ""} with a corrupted tick dropped`);
+  $("meta").innerHTML =
+    `<span><b>${esc(FILE)}</b></span><span><b>${RUN.events}</b> events</span><span>ticks <b>${RUN.minT}</b> to <b>${RUN.maxT}</b></span>` +
+    `<span><b>${RUN.nT}</b> threads</span><span><b>${RUN.nC}</b> CPUs</span>` + (notes.length ? `<span class="warn">${notes.join(", ")}</span>` : "");
+  setPlayUI(); buildLegend(); layoutTimeline(); render();
+}
+
+/* ---------------------------- rendering ---------------------------- */
+function counts(o) {
+  const c = { 2: 0, 3: 0, 4: 0, 5: 0 }, d = RUN.D[o];
+  for (let i = 0; i < RUN.nT; i++) if (c[d[i]] !== undefined && cur >= RUN.threads[i].first) c[d[i]]++;
+  return c;
+}
+
+function render() {
+  if (!RUN) return;
+  const o = cur - RUN.minT, R = RUN;
+  $("rdTick").textContent = cur;
+  $("rdSub").textContent = `of ${R.maxT}`;
+  $("kTick").textContent = cur;
+  $("scrub").value = cur;
+  const c = counts(o);
+  $("kRun").textContent = c[4]; $("kRdy").textContent = c[3]; $("kSlp").textContent = c[2]; $("kZmb").textContent = c[5];
+  const evs = R.byTick[o], disp = evs.filter(e => e.state === 4).length;
+  $("kSw").textContent = R.SW[o];
+  $("kSwSub").textContent = disp ? `+${disp} this tick` : "";
+
+  renderCpus(o, evs); renderTable(o); renderLog(evs);
+  movePlayhead(); redrawTimelines();
+}
+
+function renderCpus(o, evs) {
+  const R = RUN;
+  $("cpus").innerHTML = R.cpus.map((cid, ci) => {
+    const m = R.CM[o][ci], mix = new Map();
+    for (const e of evs) if (e.ci === ci && e.state === 4) mix.set(e.ti, (mix.get(e.ti) || 0) + 1);
+    const total = [...mix.values()].reduce((a, b) => a + b, 0);
+    let now;
+    if (m >= 0) {
+      const th = R.threads[m], q = R.P[o][m];
+      now = `<span class="chip" style="background:${th.color}"></span><span class="t">T${th.tid}</span>
+             <span class="tag">P${th.tgid}</span>${q >= 0 ? `<span class="tag">Q${q}</span>` : ""}`;
+    } else now = `<span class="chip" style="background:var(--lane-bg)"></span><span class="idle">Idle</span>`;
+    let foot;
+    if (total) {
+      foot = `<span>${total} dispatch${total > 1 ? "es" : ""} this tick</span>` +
+        [...mix.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5)
+          .map(([ti, k]) => `<span class="mix" style="background:${R.threads[ti].color}">T${R.threads[ti].tid} x${k}</span>`).join("");
+    } else foot = m >= 0 ? `<span>Still running, no switch this tick</span>` : `<span>No activity this tick</span>`;
+    return `<div class="cpu ${m >= 0 ? "busy" : ""}"><div class="top"><span class="name">CPU ${cid}</span><span class="status">${m >= 0 ? "Busy" : "Idle"}</span></div>
+            <div class="now">${now}</div><div class="foot">${foot}</div></div>`;
+  }).join("");
+}
+
+function renderTable(o) {
+  const R = RUN, d = R.D[o], e = R.E[o], n = R.N[o], cu = R.C[o], p = R.P[o], cm = R.CUM[o];
+  const prevD = o > 0 ? R.D[o - 1] : null;
+  let born = 0, html = "";
+  for (const th of R.threads) {
+    const i = th.idx, isBorn = cur >= th.first; if (isBorn) born++;
+    const st = isBorn ? d[i] : -1;
+    let pill, cls = "";
+    if (!isBorn) { pill = `<span class="pill none">not started</span>`; cls = "unborn"; }
+    else {
+      const S = STATES[st] || { name: "state " + st, color: "#64748B", dark: "#475569", tint: "#F1F3F8" };
+      pill = `<span class="pill" style="--c:${S.dark};--t:${S.tint};--d:${S.color}">${S.name}</span>`;
+      if (st === 4 && e[i] !== 4) { const E2 = STATES[e[i]]; if (E2) pill += `<span class="then">then ${E2.name}</span>`; }
+      if (!prevD || prevD[i] !== d[i] || cur === th.first) cls += " changed";
+    }
+    if (th.gstart) cls += " gstart";
+    if (focus === i) cls += " focus";
+    html += `<tr data-i="${i}" class="${cls.trim()}">
+      <td><span class="tname"><i style="background:${th.color}"></i>T${th.tid}</span><span class="kind">${th.isThread ? "thread" : "main"}</span></td>
+      <td>P${th.tgid}</td><td>${pill}</td>
+      <td>${isBorn && st === 4 ? `<b>CPU ${cu[i]}</b>` : `<span class="dash">-</span>`}</td>
+      <td>${isBorn && p[i] >= 0 ? `<span class="q q${Math.min(p[i], 3)}">Q${p[i]}</span>` : `<span class="dash">-</span>`}</td>
+      <td><div class="runs"><b>${isBorn ? cm[i] : 0}</b><div class="bar"><i style="width:${(cm[i] / R.maxCum * 100).toFixed(1)}%;background:${th.color}"></i></div>
+        <span class="plus">${n[i] ? "+" + n[i] : ""}</span></div></td></tr>`;
+  }
+  $("tbody").innerHTML = html;
+  $("thCount").textContent = `${born} of ${R.nT} started`;
+}
+
+function renderLog(evs) {
+  const R = RUN;
+  let list = evs;
+  if (focus >= 0) list = evs.filter(e => e.ti === focus);
+  const th = focus >= 0 ? R.threads[focus] : null;
+  $("logTitle").textContent = th ? `Events for T${th.tid}` : "Events this tick";
+  $("logSub").innerHTML = (th ? `<button class="clearfocus" id="clearFocus">Show all threads</button> ` : "") +
+    `${list.length} event${list.length === 1 ? "" : "s"}`;
+  if (!list.length) {
+    $("log").innerHTML = `<div class="empty">${evs.length ? "This thread had no events at this tick." : "No scheduler events at this tick. Every thread keeps the state it had before."}</div>`;
+    return;
+  }
+  const CAP = 150;
+  $("log").innerHTML = list.slice(0, CAP).map(e => {
+    const t = R.threads[e.ti], S = STATES[e.state] || { name: "state " + e.state, color: "#64748B" };
+    const txt = e.state === 4 ? `<b>T${t.tid}</b> <span>started running (Q${e.prio})</span>` : `<b>T${t.tid}</b> <span>left the CPU, now ${S.name}</span>`;
+    return `<div class="ev"><span class="dot" style="background:${S.color}"></span><span class="ev-cpu">CPU ${e.cpu}</span><span class="txt">${txt}</span></div>`;
+  }).join("") + (list.length > CAP ? `<div class="empty">${list.length - CAP} more events not shown.</div>` : "");
+}
+
+function buildLegend() {
+  $("legend").innerHTML =
+    [2, 3, 4, 5].map(s => `<span><i style="background:${STATES[s].color}"></i>${STATES[s].name}</span>`).join("") +
+    `<span><i style="background:var(--lane-bg);border:1px solid var(--line-2)"></i>not started or idle</span>`;
+}
+
+/* ---------------------------- timelines ---------------------------- */
+const GUT = 92, RPAD = 16, LANE = 20, GAP = 4, GGAP = 8, AXIS = 24;
+let TL = null;
+
+function layoutTimeline() {
+  if (!RUN) return;
+  const wrap = $("tlWrap"), W = Math.max(320, $("cvThreads").parentElement.clientWidth - 32);
+  const R = RUN, dpr = window.devicePixelRatio || 1;
+  const tRows = []; let y = AXIS;
+  R.threads.forEach(th => { if (th.gstart && th.idx > 0) y += GGAP; tRows.push(y); y += LANE + GAP; });
+  const tH = y + 2;
+  const cRows = R.cpus.map((_, i) => 4 + i * (LANE + GAP));
+  const cH = 4 + R.nC * (LANE + GAP) + 22;
+  const setup = (cv, h) => { cv.width = W * dpr; cv.height = h * dpr; cv.style.height = h + "px"; cv.style.width = W + "px"; const x = cv.getContext("2d"); x.setTransform(dpr, 0, 0, dpr, 0, 0); return x; };
+  TL = { W, tH, cH, tRows, cRows, pw: (W - GUT - RPAD) / R.span, ct: setup($("cvThreads"), tH), cc: setup($("cvCpus"), cH) };
+  redrawTimelines(); movePlayhead();
+}
+
+function niceStep(span, pw) {
+  for (const s of [1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 5000, 10000, 20000, 50000, 100000]) if (s * pw >= 64) return s;
+  return 100000;
+}
+
+function drawAxis(ctx, y) {
+  const R = RUN, pw = TL.pw, step = niceStep(R.span, pw);
+  ctx.fillStyle = "#7B8698"; ctx.strokeStyle = "#CDD4DF"; ctx.font = "500 11px " + getComputedStyle(document.body).fontFamily; ctx.textAlign = "center"; ctx.lineWidth = 1;
+  const first = Math.ceil(R.minT / step) * step;
+  for (let t = first; t <= R.maxT; t += step) {
+    const x = Math.round(GUT + (t - R.minT + 0.5) * pw) + 0.5;
+    ctx.beginPath(); ctx.moveTo(x, y + 12); ctx.lineTo(x, y + 18); ctx.stroke();
+    ctx.fillText(t, x, y + 9);
+  }
+  ctx.textAlign = "left";
+}
+
+function drawLane(ctx, y, colorAt, dimmed) {
+  const R = RUN, pw = TL.pw;
+  ctx.globalAlpha = dimmed ? 0.22 : 1;
+  ctx.fillStyle = "#EEF1F6"; ctx.fillRect(GUT, y, TL.W - GUT - RPAD, LANE);
+  let o0 = 0, c0 = colorAt(0);
+  const flush = (o1) => {
+    if (c0) {
+      const xs = Math.round(GUT + o0 * pw), xe = Math.round(GUT + o1 * pw);
+      ctx.fillStyle = c0; ctx.fillRect(xs, y, Math.max(1, xe - xs), LANE);
+    }
+  };
+  for (let o = 1; o < R.span; o++) { const c = colorAt(o); if (c !== c0) { flush(o); o0 = o; c0 = c; } }
+  flush(R.span);
+  ctx.globalAlpha = 1;
+}
+
+function redrawTimelines() {
+  if (!RUN || !TL) return;
+  const R = RUN, ct = TL.ct, cc = TL.cc, font = getComputedStyle(document.body).fontFamily;
+  ct.clearRect(0, 0, TL.W, TL.tH); cc.clearRect(0, 0, TL.W, TL.cH);
+  drawAxis(ct, 0);
+  R.threads.forEach(th => {
+    const y = TL.tRows[th.idx], dim = focus >= 0 && focus !== th.idx;
+    drawLane(ct, y, o => { const s = R.D[o][th.idx]; return s === 0 || s === undefined ? null : (STATES[s] || {}).color; }, dim);
+    ct.globalAlpha = dim ? 0.4 : 1; ct.textBaseline = "middle";
+    ct.fillStyle = th.color; ct.fillRect(6, y + 5, 10, 10);
+    ct.fillStyle = "#1B2436"; ct.font = `700 12px ${font}`; ct.fillText("T" + th.tid, 22, y + LANE / 2 + 1);
+    ct.fillStyle = "#7B8698"; ct.font = `500 11px ${font}`; ct.fillText("P" + th.tgid, 56, y + LANE / 2 + 1);
+    ct.globalAlpha = 1;
+  });
+  R.cpus.forEach((cid, ci) => {
+    const y = TL.cRows[ci];
+    drawLane(cc, y, o => { const m = R.CM[o][ci]; return m >= 0 ? R.threads[m].color : null; }, false);
+    if (focus >= 0) {   // dim everything that is not the focused thread
+      cc.fillStyle = "rgba(255,255,255,.75)";
+      let o0 = -1;
+      for (let o = 0; o <= R.span; o++) {
+        const isOther = o < R.span && R.CM[o][ci] >= 0 && R.CM[o][ci] !== focus;
+        if (isOther && o0 < 0) o0 = o;
+        if (!isOther && o0 >= 0) { const xs = Math.round(GUT + o0 * TL.pw), xe = Math.round(GUT + o * TL.pw); cc.fillRect(xs, y, Math.max(1, xe - xs), LANE); o0 = -1; }
+      }
+    }
+    cc.textBaseline = "middle"; cc.fillStyle = "#1B2436"; cc.font = `700 12px ${font}`; cc.fillText("CPU " + cid, 8, y + LANE / 2 + 1);
+  });
+  drawAxis(cc, 4 + R.nC * (LANE + GAP) - 4);
+}
+
+function movePlayhead() {
+  if (!RUN || !TL) return;
+  const wrap = $("tlWrap"), pad = 16, o = cur - RUN.minT;
+  const x = pad + GUT + (o + 0.5) * TL.pw;
+  $("ph").style.left = x + "px";
+  const f = $("future"); const start = pad + GUT + (o + 1) * TL.pw;
+  f.style.left = start + "px"; f.style.width = Math.max(0, pad + TL.W - RPAD - start) + "px";
+  f.style.top = $("cvThreads").offsetTop - 2 + "px"; f.style.bottom = "6px";
+  $("ph").style.top = $("cvThreads").offsetTop - 4 + "px";
+}
+
+/* timeline interaction */
+function tlPos(ev) {
+  const cv = ev.target.closest("canvas"); if (!cv) return null;
+  const r = cv.getBoundingClientRect(), x = ev.clientX - r.left, y = ev.clientY - r.top;
+  const o = Math.floor((x - GUT) / TL.pw);
+  return { cv, x, y, o: Math.max(0, Math.min(RUN.span - 1, o)), inPlot: x >= GUT, wrapX: ev.clientX - $("tlWrap").getBoundingClientRect().left, wrapY: ev.clientY - $("tlWrap").getBoundingClientRect().top };
+}
+function rowAt(rows, y) { for (let i = 0; i < rows.length; i++) if (y >= rows[i] && y <= rows[i] + LANE) return i; return -1; }
+
+let dragging = false;
+$("tlWrap").addEventListener("pointerdown", ev => {
+  if (!RUN) return; const p = tlPos(ev); if (!p) return;
+  if (!p.inPlot) {
+    if (p.cv.id === "cvThreads") { const i = rowAt(TL.tRows, p.y); if (i >= 0) { focus = focus === i ? -1 : i; render(); } }
+    return;
+  }
+  dragging = true; pause(); seek(RUN.minT + p.o);
+  $("tlWrap").setPointerCapture(ev.pointerId);
+});
+$("tlWrap").addEventListener("pointermove", ev => {
+  if (!RUN || !TL) return;
+  if (dragging) { const r = $("cvThreads").getBoundingClientRect(); const o = Math.max(0, Math.min(RUN.span - 1, Math.floor((ev.clientX - r.left - GUT) / TL.pw))); seek(RUN.minT + o); }
+  const el = document.elementFromPoint(ev.clientX, ev.clientY);
+  const p = el && el.tagName === "CANVAS" ? tlPos({ target: el, clientX: ev.clientX, clientY: ev.clientY }) : null;
+  const tip = $("tip");
+  if (!p || !p.inPlot) { tip.hidden = true; return; }
+  const o = p.o, R = RUN; let txt = null;
+  if (p.cv.id === "cvThreads") {
+    const i = rowAt(TL.tRows, p.y);
+    if (i >= 0) {
+      const th = R.threads[i], s = R.D[o][i];
+      if (cur >= 0 && R.minT + o < th.first) txt = `T${th.tid} (P${th.tgid}) at tick ${R.minT + o}: not started`;
+      else { const S = STATES[s] || { name: "?" }; txt = `T${th.tid} (P${th.tgid}) at tick ${R.minT + o}: ${S.name}` + (R.N[o][i] ? `, ${R.N[o][i]} dispatch${R.N[o][i] > 1 ? "es" : ""}` : "") + (R.P[o][i] >= 0 ? `, Q${R.P[o][i]}` : ""); }
+    }
+  } else {
+    const ci = rowAt(TL.cRows, p.y);
+    if (ci >= 0) {
+      const mix = new Map(); for (const e of R.byTick[o]) if (e.ci === ci && e.state === 4) mix.set(e.ti, (mix.get(e.ti) || 0) + 1);
+      const m = R.CM[o][ci];
+      txt = `CPU ${R.cpus[ci]} at tick ${R.minT + o}: ` + (mix.size ? [...mix.entries()].map(([ti, k]) => `T${R.threads[ti].tid} x${k}`).join(", ") : (m >= 0 ? `T${R.threads[m].tid} (still running)` : "idle"));
+    }
+  }
+  if (!txt) { tip.hidden = true; return; }
+  tip.textContent = txt; tip.hidden = false; tip.style.left = p.wrapX + "px"; tip.style.top = p.wrapY + "px";
+});
+$("tlWrap").addEventListener("pointerup", () => { dragging = false; });
+$("tlWrap").addEventListener("pointerleave", () => { $("tip").hidden = true; });
+new ResizeObserver(() => { if (RUN) layoutTimeline(); }).observe($("tlWrap"));
+
+/* ---------------------------- playback ---------------------------- */
+function seek(t) { cur = Math.max(RUN.minT, Math.min(RUN.maxT, t)); render(); }
+function nextTick(t) {
+  const o = t - RUN.minT;
+  if (t >= RUN.maxT) return null;
+  if ($("skipIdle").checked) { const n = RUN.next[o]; return n < 0 ? null : RUN.minT + n; }
+  return t + 1;
+}
+function prevTick(t) {
+  const o = t - RUN.minT;
+  if (t <= RUN.minT) return null;
+  if ($("skipIdle").checked) { const p = RUN.prevA[o]; return p < 0 ? null : RUN.minT + p; }
+  return t - 1;
+}
+function setPlayUI() {
+  $("playTxt").textContent = playing ? "Pause" : "Play";
+  $("playIcon").innerHTML = playing ? '<path d="M3 2h4v12H3zM9 2h4v12H9z"/>' : '<path d="M4 2v12l10-6z"/>';
+}
+function pause() { playing = false; setPlayUI(); }
+function play() {
+  if (!RUN) return;
+  if (cur >= RUN.maxT) cur = RUN.minT;
+  playing = true; acc = 0; lastT = performance.now(); setPlayUI(); requestAnimationFrame(frame);
+}
+function frame(now) {
+  if (!playing) return;
+  const dt = Math.min((now - lastT) / 1000, 0.25); lastT = now;
+  acc += dt * BASE_TPS * speed;
+  let moved = false;
+  while (acc >= 1) {
+    acc -= 1;
+    const n = nextTick(cur);
+    if (n === null) { pause(); break; }
+    cur = n; moved = true;
+  }
+  if (moved) render();
+  if (playing) requestAnimationFrame(frame);
+}
+function step(dir) {
+  if (!RUN) return; pause();
+  const t = dir > 0 ? nextTick(cur) : prevTick(cur);
+  if (t !== null) seek(t);
+}
+
+/* ---------------------------- wiring ---------------------------- */
+$("bPlay").onclick = () => playing ? pause() : play();
+$("bNext").onclick = () => step(1);
+$("bPrev").onclick = () => step(-1);
+$("bStart").onclick = () => { pause(); seek(RUN.minT); };
+$("scrub").addEventListener("input", e => { pause(); seek(Number(e.target.value)); });
+document.querySelectorAll(".speed button").forEach(b => b.onclick = () => setSpeed(Number(b.dataset.speed)));
+function setSpeed(s) { speed = s; document.querySelectorAll(".speed button").forEach(b => b.setAttribute("aria-checked", String(Number(b.dataset.speed) === s))); }
+
+$("tbody").addEventListener("click", e => {
+  const tr = e.target.closest("tr"); if (!tr) return;
+  const i = Number(tr.dataset.i); focus = focus === i ? -1 : i; render();
+});
+$("log").addEventListener("click", e => { if (e.target.id === "clearFocus") { focus = -1; render(); } });
+$("logSub").addEventListener("click", e => { if (e.target.id === "clearFocus") { focus = -1; render(); } });
+
+function pickFile() { $("fileInput").click(); }
+$("loadBtn").onclick = pickFile; $("hero").onclick = pickFile;
+$("fileInput").addEventListener("change", e => {
+  const f = e.target.files[0]; if (!f) return;
+  const rd = new FileReader(); rd.onload = ev => loadText(ev.target.result, f.name); rd.readAsText(f); e.target.value = "";
+});
+$("runSel").addEventListener("change", e => selectRun(Number(e.target.value)));
+
+
+/* drag and drop */
+["dragenter", "dragover"].forEach(t => window.addEventListener(t, e => { e.preventDefault(); $("hero").classList.add("drag"); }));
+["dragleave", "drop"].forEach(t => window.addEventListener(t, e => { e.preventDefault(); if (t === "drop" || e.target === document.documentElement) $("hero").classList.remove("drag"); }));
+window.addEventListener("drop", e => {
+  const f = e.dataTransfer.files[0]; if (!f) return;
+  const rd = new FileReader(); rd.onload = ev => loadText(ev.target.result, f.name); rd.readAsText(f);
+});
+
+/* keyboard */
+window.addEventListener("keydown", e => {
+  if (!RUN) return;
+  const tag = e.target.tagName, isRange = tag === "INPUT" && e.target.type === "range";
+  if (e.key === " " && !["BUTTON", "INPUT", "SELECT"].includes(tag)) { e.preventDefault(); playing ? pause() : play(); }
+  else if ((e.key === "ArrowRight" || e.key === "ArrowLeft") && !isRange && tag !== "SELECT") { e.preventDefault(); step(e.key === "ArrowRight" ? 1 : -1); }
+  else if (e.key === "Home" && !isRange) { pause(); seek(RUN.minT); }
+  else if (["1", "2", "3"].includes(e.key) && tag !== "INPUT" && tag !== "SELECT") setSpeed(Number(e.key));
+});
+</script>
+</body>
+</html>
