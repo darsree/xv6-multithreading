@@ -221,8 +221,29 @@ def build_bars(df, cpu_col, value_col):
                 # (can happen right at the start of a capture) -- skip it,
                 # it carries no new bar of its own.
                 i += 1
-        bars_per_cpu[cpu] = bars
+        bars_per_cpu[cpu] = _fill_idle_gaps(bars)
     return bars_per_cpu
+
+
+def _fill_idle_gaps(bars):
+    """Insert an explicit IDLE_SENTINEL block into any gap between two
+    consecutive real bars on the same cpu. Without this, a genuine
+    stretch where nothing was scheduled on this cpu (the thread group
+    finished, or you're between typing commands at the shell) renders
+    as plain blank space with no legend explanation -- indistinguishable
+    at a glance from "no data was captured here." Marking it explicitly
+    makes the idle stretch self-explanatory on the chart itself."""
+    if not bars:
+        return bars
+    filled = [bars[0]]
+    for start, width, value in bars[1:]:
+        prev_start, prev_width, _ = filled[-1]
+        prev_end = prev_start + prev_width
+        gap = start - prev_end
+        if gap > 0:
+            filled.append((prev_end, gap, IDLE_SENTINEL))
+        filled.append((start, width, value))
+    return filled
 
 
 def build_bars_legacy(df, cpu_col, value_col):
