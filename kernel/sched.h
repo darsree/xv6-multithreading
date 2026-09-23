@@ -30,10 +30,16 @@ void mlfq_age_tick(void);
 void mlfq_on_switch_out(struct proc *p);
 
 // Called from proc.c's scheduler() loop to pick the next proc to run.
-// Scans queue_level 0..NQUEUES-1 (0 = highest priority) and returns the
-// first RUNNABLE proc found, WITH ITS LOCK HELD (same convention as
-// allocproc()) — or 0 if nothing is runnable. Keeps the MLFQ scan logic
-// out of proc.c.
-struct proc *sched_pick_next(void);
+// Scans queue_level 0..NQUEUES-1 (0 = highest priority). cpu_id is the
+// caller's own core (from cpuid()): at each level, procs whose
+// p->cpu_affinity matches cpu_id (set by M4's smp_balance.c, or -1 for
+// a proc that has never run) are preferred; only if none exist at that
+// level does the scan fall back to ANY RUNNABLE proc there regardless
+// of affinity. This keeps affinity a soft preference, never a
+// guarantee — strict level-priority ordering and starvation-freedom
+// are unaffected. Returns the chosen proc WITH ITS LOCK HELD (same
+// convention as allocproc()) — or 0 if nothing is runnable. Keeps the
+// MLFQ scan logic out of proc.c.
+struct proc *sched_pick_next(int cpu_id);
 
 #endif // SCHED_H

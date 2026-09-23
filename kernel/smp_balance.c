@@ -1,24 +1,29 @@
 // smp_balance.c — Member 4: per-CPU load tracking + soft-affinity
-// load balancing (optional stretch item).
+// load balancing.
 //
-// NOTE ON SCOPE: M3's sched_pick_next() does a single global scan of
-// proc[] by queue_level — any CPU can pick up any RUNNABLE proc, so
-// this scheduler is already implicitly load-balanced (there's no
-// per-CPU run queue to go unbalanced in the first place). Rewriting
-// that into real per-CPU queues would mean rewriting M3's file, which
-// is exactly why the team doc marks this item "cut first if
-// time-pressured."
+// SCOPE HISTORY: M3's sched_pick_next() originally did a single global
+// scan of proc[] by queue_level — any CPU could pick up any RUNNABLE
+// proc, so migrating a proc's affinity here was bookkeeping only: it
+// kept accurate per-CPU load stats (visible via getschedstat()'s
+// cpu_id field and tools/viz's timeline) but didn't change which CPU
+// actually ran anything next.
 //
-// What's implemented here instead is still real, just narrower in
-// scope: we track which CPU each proc last ran on (p->cpu_affinity)
-// and a live per-CPU load count. When a CPU goes idle, it checks
-// whether some other CPU's affinity group is significantly heavier
-// and, if so, reassigns ("migrates") one of that CPU's RUNNABLE procs
-// to itself. This doesn't pin execution (sched_pick_next ignores
-// affinity), but it keeps accurate per-CPU load stats — visible via
-// getschedstat()'s cpu_id field and tools/viz's timeline — and gives
-// a real hook to make sched_pick_next() affinity-aware later without
-// touching M3's file today.
+// AFFINITY FIX: sched_pick_next() now takes the calling CPU's id and,
+// at each queue level, prefers a RUNNABLE proc whose cpu_affinity
+// matches it before falling back to any proc at that level (see the
+// comment on sched_pick_next() in sched.c). So migration performed
+// here — reassigning p->cpu_affinity when this CPU is idle and another
+// CPU's load is significantly heavier — now genuinely steers execution
+// toward the idle CPU on its next pick, not just its load counter. It
+// is still "soft": the fallback pass means a proc is never starved
+// just because its affinity points at a busy CPU, and strict MLFQ
+// level-priority order is never overridden by affinity.
+//
+// We track which CPU each proc last ran on (p->cpu_affinity) and a
+// live per-CPU load count. When a CPU goes idle, it checks whether
+// some other CPU's affinity group is significantly heavier and, if
+// so, reassigns ("migrates") one of that CPU's RUNNABLE procs to
+// itself.
 
 #include "types.h"
 #include "param.h"
@@ -36,9 +41,11 @@ static int cpu_load[NCPU]; // live count of procs whose cpu_affinity == that cpu
 
 // Minimum ticks between balance checks. Without this, a CPU that's idle
 // for a stretch calls smp_balance_check() on every single idle-loop pass
-// (i.e. every timer tick) — since sched_pick_next() ignores affinity, a
-// proc can get re-dispatched anywhere and flip its affinity right back,
-// so an unthrottled check just thrashes the same proc back and forth
+// (i.e. every timer tick). sched_pick_next() now prefers affinity but
+// still falls back to ANY RUNNABLE proc at a level when no affinity
+// match is idle to claim it (see its comment in sched.c) — so a proc
+// can still get picked up elsewhere and flip its affinity right back,
+// and an unthrottled check would thrash the same proc back and forth
 // (visible as dozens of repeated "migrating pid=X" log lines with the
 // same load numbers, going nowhere). This cooldown is what actually
 // stops that.

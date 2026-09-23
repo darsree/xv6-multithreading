@@ -165,179 +165,26 @@ mkfs/mkfs fs.img README user/_cat user/_echo user/_forktest user/_grep user/_ini
 nmeta 47 (boot, super, log blocks 31, inode blocks 13, bitmap blocks 1) blocks 1953 total 2000
 balloc: first 1406 blocks have been allocated
 balloc: write bitmap block at sector 46
-qemu-system-riscv64 -machine virt -bios none -kernel kernel/kernel -m 128M -smp 1 -nographic -global virtio-mmio.force-legacy=false -drive file=fs.img,if=none,format=raw,id=x0 -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0
+qemu-system-riscv64 -machine virt -bios none -kernel kernel/kernel -m 128M -smp 3 -nographic -global virtio-mmio.force-legacy=false -drive file=fs.img,if=none,format=raw,id=x0 -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0
 
 xv6 kernel is booting
 
-init: starting sh
-$ pinv_test
-mlfq: t=42 pid=3 tid=3 level 0->1 ema=30% q=4 (quantum used up)
-pinv_test: low needs ~25 ticks of CPU inside the lock; high arrives after 15 ticks
-mlfq: t=43 pid=3 tid=3 level 1->0 ema=27% q=5 (blocked early)
-[t=43] [low] locking mutex
-[t=43] [low] got it, doing its critical section
-mlfq: t=45 pid=4 tid=4 level 0->1 ema=30% q=2 (quantum used up)
-[t=45] [medium] spinning, never touches the mutex
-mlfq: t=47 pid=5 tid=5 level 0->1 ema=30% q=2 (quantum used up)
-mlfq: t=52 pid=4 tid=4 level 1->2 ema=51% q=5 (quantum used up)
-mlfq: t=57 pid=5 tid=5 level 1->2 ema=51% q=5 (quantum used up)
-mlfq: t=65 pid=4 tid=4 level 2->3 ema=65% q=8 (quantum used up)
-[t=65] [high] trying to lock -- should block on low
-donate: t=65 pid=4 BOOST level 3 -> 0 (blocker wants 0)
-[t=75] [low] critical section done, unlocking
-donate: t=75 pid=4 RESTORE level 0 -> 3
-[t=75] [high] GOT IT
-[t=75] [medium] done
-pinv_test: RESULT high waited 10 ticks for the mutex
-$ schedstat_dump
-tick,tgid,tid,is_thread,state,cpu_id,priority
-1,1,1,0,4,0,0
-1,1,1,0,2,0,0
-1,1,1,0,4,0,0
-1,1,1,0,2,0,0
-1,1,1,0,4,0,0
-1,1,1,0,2,0,0
-1,1,1,0,4,0,0
-1,1,1,0,2,0,0
-1,1,1,0,4,0,0
-1,1,1,0,2,0,0
-1,1,1,0,4,0,0
-1,1,1,0,2,0,0
-1,1,1,0,4,0,0
-1,1,1,0,2,0,0
-1,1,1,0,4,0,0
-1,1,1,0,2,0,0
-1,1,1,0,4,0,0
-1,1,1,0,2,0,0
-1,1,1,0,4,0,0
-1,1,1,0,2,0,0
-1,1,1,0,4,0,0
-1,1,1,0,2,0,0
-1,1,1,0,4,0,0
-1,1,1,0,2,0,0
-1,1,1,0,4,0,0
-1,1,1,0,2,0,0
-1,1,1,0,4,0,0
-1,1,1,0,2,0,0
-1,1,1,0,4,0,0
-1,1,1,0,2,0,0
-1,1,1,0,4,0,0
-1,1,1,0,2,0,0
-1,1,1,0,4,0,0
-1,1,1,0,2,0,0
-1,1,1,0,4,0,0
-1,1,1,0,2,0,0
-1,1,1,0,4,0,0
-1,1,1,0,2,0,0
-1,1,1,0,4,0,0
-1,1,1,0,2,0,0
-1,1,1,0,4,0,0
-1,1,1,0,2,0,0
-1,1,1,0,4,0,0
-1,1,1,0,2,0,0
-1,1,1,0,4,0,0
-1,1,1,0,2,0,0
-1,1,1,0,4,0,0
-1,1,1,0,2,0,0
-1,1,1,0,4,0,0
-1,1,1,0,2,0,0
-1,1,1,0,4,0,0
-1,1,1,0,2,0,0
-1,1,1,0,4,0,0
-1,1,1,0,2,0,0
-1,1,1,0,4,0,0
-1,1,1,0,2,0,0
-1,1,1,0,4,0,0
-1,1,1,0,2,0,0
-1,1,1,0,4,0,0
-1,1,1,0,2,0,0
-1,1,1,0,4,0,0
-1,1,1,0,2,0,0
-1,1,1,0,4,0,0
-1,1,1,0,2,0,0
-1,1,1,0,4,0,0
-1,1,1,0,2,0,0
-1,1,1,0,4,0,0
-1,1,1,0,2,0,0
-1,2,2,0,4,0,0
-1,2,2,0,2,0,0
-1,2,2,0,4,0,0
-1,2,2,0,2,0,0
-1,2,2,0,4,0,0
-1,2,2,0,2,0,0
-1,2,2,0,4,0,0
-1,2,2,0,2,0,0
-1,2,2,0,4,0,0
-1,2,2,0,2,0,0
-1,2,2,0,4,0,0
-1,2,2,0,2,0,0
-1,2,2,0,4,0,0
-1,2,2,0,2,0,0
-1,2,2,0,4,0,0
-1,2,2,0,2,0,0
-1,2,2,0,4,0,0
-1,2,2,0,2,0,0
-1,2,2,0,4,0,0
-1,2,2,0,2,0,0
-37,2,2,0,4,0,0
-37,2,2,0,2,0,0
-37,3,3,0,4,0,0
-37,3,3,0,2,0,0
-37,3,3,0,4,0,0
-37,3,3,0,2,0,0
-37,3,3,0,4,0,0
-37,3,3,0,2,0,0
-37,3,3,0,4,0,0
-37,3,3,0,2,0,0
-37,3,3,0,4,0,0
-37,3,3,0,2,0,0
-38,3,3,0,4,0,0
-42,3,3,0,3,0,1
-42,3,3,0,4,0,1
-43,3,3,0,2,0,0
-43,3,4,1,4,0,0
-45,3,4,1,3,0,1
-45,3,5,1,4,0,0
-47,3,5,1,3,0,1
-47,3,6,1,4,0,0
-47,3,6,1,2,0,0
-47,3,4,1,4,0,1
-52,3,4,1,3,0,2
-52,3,6,1,4,0,0
-52,3,6,1,2,0,0
-52,3,5,1,4,0,1
-57,3,5,1,3,0,2
-57,3,6,1,4,0,0
-57,3,6,1,2,0,0
-57,3,4,1,4,0,2
-65,3,4,1,3,0,3
-65,3,6,1,4,0,0
-65,3,6,1,2,0,0
-65,3,4,1,4,0,0
-75,3,4,1,5,0,3
-75,3,6,1,4,0,0
-75,3,6,1,5,0,0
-75,3,3,0,4,0,0
-75,3,3,0,2,0,0
-75,3,5,1,4,0,2
-75,3,5,1,5,0,2
-75,3,3,0,4,0,0
-75,3,3,0,5,0,0
-75,2,2,0,4,0,0
-75,2,2,0,2,0,0
-177,2,2,0,4,0,0
-177,2,2,0,2,0,0
-177,7,7,0,4,0,0
-178,7,7,0,2,0,0
-178,7,7,0,4,0,0
-178,7,7,0,2,0,0
-178,7,7,0,4,0,0
-178,7,7,0,2,0,0
-178,7,7,0,4,0,0
-178,7,7,0,2,0,0
-178,7,7,0,4,0,0
-178,7,7,0,2,0,0
-178,7,7,0,4,0,0
-END_SCHEDSTAT
+hart 1 starting
+hart 2 starting
+rinit: starting sh
+$ r  racetest
+racetest: 4 threads x 20000 increments each, expecting 80000
+
+=== WITHOUT a mutex ===
+expected: 80000
+actual:   42120
+-> LOST 37880 increments to a race condition (proves real shared memory + real concurrency)
+
+=== WITH a mutex, same increment pattern ===
+expected: 80000
+actual:   80000
+-> PASS: exact match, mutex prevented every lost update
+$ [A[Bracetest
+exec [A[Bracetest failed
 $ QEMU: Terminated
 
