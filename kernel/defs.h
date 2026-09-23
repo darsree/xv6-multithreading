@@ -122,7 +122,7 @@ void            record_schedstat(struct proc*, int);
 int             getschedstat(void*, int);
 void            mlfq_age_tick(void);
 void            mlfq_on_switch_out(struct proc *);
-struct proc*    sched_pick_next(void);
+struct proc*    sched_pick_next(int);
 
 // donate.c
 void            donate_init_proc(struct proc *);

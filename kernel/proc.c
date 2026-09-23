@@ -542,7 +542,11 @@ scheduler(void)
 
     // M3: MLFQ pick — scans queue_level 0..NQUEUES-1 and returns the
     // chosen proc with its lock already held (or 0 if none RUNNABLE).
-    p = sched_pick_next();
+    // AFFINITY FIX: now passed this core's id so it can prefer a
+    // RUNNABLE proc whose cpu_affinity (M4's smp_balance.c) matches
+    // this CPU before falling back to any proc at that level — see
+    // sched_pick_next()'s comment in sched.c for why.
+    p = sched_pick_next(cpuid());
     
     if (p) {
       // Switch to chosen process.  It is the process's job

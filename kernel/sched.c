@@ -197,20 +197,50 @@ static int scan_cursor[NQUEUES];
 // from that level's rotating cursor (wrapping around), so procs at the
 // same level get round-robin turns. Returns the chosen proc WITH ITS
 // LOCK HELD, or 0 if nothing is RUNNABLE.
+//
+// AFFINITY FIX (M4 integration): previously this ignored p->cpu_affinity
+// entirely, so smp_balance.c's migration only ever relabeled a proc's
+// affinity without changing which CPU actually ran it next — load
+// tracking was accurate but nothing enforced it. Fixed by making the
+// scan two-pass per level: first look for a RUNNABLE proc at this level
+// whose affinity matches the calling CPU (cpu_id), or is unassigned
+// (-1, for a proc that has never run); only if none exists does the
+// scan fall back to ANY RUNNABLE proc at that level regardless of
+// affinity. This makes affinity a real (soft) preference instead of a
+// no-op label, while the unconditional fallback pass guarantees a proc
+// can never wait just because its affinity points at a busy CPU —
+// strict level-priority order and starvation-freedom (via
+// mlfq_age_tick()'s aging) are both unchanged.
 struct proc *
-sched_pick_next(void)
+sched_pick_next(int cpu_id)
 {
   struct proc *p;
   int level, i, idx;
 
   for (level = 0; level < NQUEUES; level++) {
+    // Pass 1: prefer a proc whose cpu_affinity matches this CPU.
+    for (i = 0; i < NPROC; i++) {
+      idx = (scan_cursor[level] + i) % NPROC;
+      p = &proc[idx];
+      acquire(&p->lock);
+      if (p->state == RUNNABLE && p->queue_level == level &&
+          (p->cpu_affinity == cpu_id || p->cpu_affinity == -1)) {
+        scan_cursor[level] = (idx + 1) % NPROC;
+        return p; // caller dispatches, then releases p->lock.
+      }
+      release(&p->lock);
+    }
+    // Pass 2: no affinity-matched candidate at this level -- fall back
+    // to ANY RUNNABLE proc at this level, ignoring affinity, so a proc
+    // whose affinity points elsewhere never starves behind an idle CPU
+    // that could run it right now.
     for (i = 0; i < NPROC; i++) {
       idx = (scan_cursor[level] + i) % NPROC;
       p = &proc[idx];
       acquire(&p->lock);
       if (p->state == RUNNABLE && p->queue_level == level) {
         scan_cursor[level] = (idx + 1) % NPROC;
-        return p; // caller dispatches, then releases p->lock.
+        return p;
       }
       release(&p->lock);
     }

@@ -98,6 +98,6 @@ main(int argc, char *argv[])
     thread_join(hog_tid[i]);
   thread_join(starve_tid);
 
-  printf("starvetest: done. Now run: schedstat_dump starve.csv\n");
+  printf("starvetest: done.\n");
   exit(0);
 }
