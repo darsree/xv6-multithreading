@@ -9,6 +9,7 @@ switches, colored two ways:
   2. by queue_level ("priority" column) -> scheduler-behavior view
                   (how MLFQ level moves over time)
 
+
 Each dispatch is now logged TWICE: once when scheduler() picks a proc
 (state=RUNNING), and once when sched() switches it back out (state=
 whatever it becomes next -- RUNNABLE/SLEEPING/ZOMBIE, never RUNNING).

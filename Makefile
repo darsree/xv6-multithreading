@@ -36,6 +36,7 @@ OBJS = \
   $K/smp_balance.o \
   $K/schedstat.o \
 
+
 # riscv64-unknown-elf- or riscv64-linux-gnu-
 # perhaps in /opt/riscv/bin
 #TOOLPREFIX = 
@@ -166,7 +167,8 @@ UPROGS=\
 	$U/_starvetest\
 	$U/_pinv_test\
 	$U/_threadexe_test\
-
+	$U/_smptest\
+	
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)
 
