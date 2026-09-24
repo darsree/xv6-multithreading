@@ -73,9 +73,9 @@ smp_note_dispatch(struct proc *p, int cpu_id)
 {
   acquire(&smp_lock);
   if (p->cpu_affinity >= 0 && p->cpu_affinity != cpu_id)
-    cpu_load[p->cpu_affinity]--;
+    cpu_load[p->cpu_affinity]--;    //previously belong to another cpu
   if (p->cpu_affinity != cpu_id)
-    cpu_load[cpu_id]++;
+    cpu_load[cpu_id]++;     // add to new cpu
   release(&smp_lock);
   p->cpu_affinity = cpu_id;
 }
@@ -123,7 +123,7 @@ smp_balance_check(void)
       printk("smp_balance: migrating pid=%d tid=%d cpu %d -> %d (load %d vs %d)\n",
              p->pid, p->tid, busiest, me, busiest_load, my_load);
       acquire(&smp_lock);
-      cpu_load[busiest]--;
+      cpu_load[busiest]--; 
       cpu_load[me]++;
       release(&smp_lock);
       p->cpu_affinity = me;
